@@ -1,26 +1,28 @@
+import os
+import pandas as pd
 import numpy as np
-import networkx as nx
 from collections import defaultdict
-from datetime import datetime, timedelta
 import random
 from sklearn.metrics import roc_auc_score
 
+# --- Modules ---
+
 class InteractionHistory:
-    def __init__(self, time_window):
+    def __init__(self, time_window=100000):
         self.time_window = time_window
-        self.node_history = defaultdict(list)  # node_id -> [(timestamp, neighbor)]
+        self.node_history = defaultdict(list)
 
     def add_interaction(self, u, v, t):
         self.node_history[u].append((t, v))
         self.node_history[v].append((t, u))
 
     def get_recent_neighbors(self, node, current_time):
-        return [v for t, v in self.node_history[node]
-                if current_time - t <= self.time_window]
+        return [v for t, v in self.node_history[node] if current_time - t <= self.time_window]
+
 
 class TemporalCentrality:
     def __init__(self):
-        self.centrality = defaultdict(float)  # node -> score
+        self.centrality = defaultdict(float)
 
     def update(self, u, v, t, decay_factor=0.99):
         self.centrality[u] = self.centrality[u] * decay_factor + 1
@@ -30,42 +32,77 @@ class TemporalCentrality:
         return self.centrality.get(node, 0.0)
 
 
-def thas_score(a, b, current_time, hist: InteractionHistory, centrality: TemporalCentrality):
+class EdgeBank:
+    def __init__(self, window=100000):
+        self.edge_set = set()
+        self.edge_buffer = []
+        self.window = window
+
+    def update(self, u, v, t):
+        self.edge_buffer.append((u, v, t))
+        self.edge_set.add((u, v))
+        self.edge_set.add((v, u))
+
+        while self.edge_buffer and t - self.edge_buffer[0][2] > self.window:
+            old_u, old_v, _ = self.edge_buffer.pop(0)
+            self.edge_set.discard((old_u, old_v))
+            self.edge_set.discard((old_v, old_u))
+
+    def exists(self, u, v):
+        return (u, v) in self.edge_set
+
+
+class PopTrack:
+    def __init__(self, decay=0.99):
+        self.popularity = defaultdict(float)
+        self.decay = decay
+
+    def update(self, u, v):
+        self.popularity[u] = self.popularity[u] * self.decay + 1
+        self.popularity[v] = self.popularity[v] * self.decay + 1
+
+    def get(self, node):
+        return self.popularity[node]
+
+
+# --- Scoring Functions ---
+
+def thas_score(a, b, current_time, hist, centrality):
     hubs_a = hist.get_recent_neighbors(a, current_time)
     hubs_b = hist.get_recent_neighbors(b, current_time)
     shared_hubs = set(hubs_a).intersection(hubs_b)
-    
+
     score = 0.0
     for h in shared_hubs:
-        rec_a = 1.0 / (1 + min([current_time - t for t, v in hist.node_history[a] if v == h]))
-        rec_b = 1.0 / (1 + min([current_time - t for t, v in hist.node_history[b] if v == h]))
+        times_a = [current_time - t for t, v in hist.node_history[a] if v == h]
+        times_b = [current_time - t for t, v in hist.node_history[b] if v == h]
+        if not times_a or not times_b:
+            continue
+        rec_a = 1.0 / (1 + min(times_a))
+        rec_b = 1.0 / (1 + min(times_b))
         c = centrality.get(h)
         score += rec_a * rec_b * c
     return score
 
-def recency_score(a, b, current_time, hist):
-    # Most recent direct interaction
-    times = [current_time - t for t, v in hist.node_history[a] if v == b]
-    return 1.0 / (1 + min(times)) if times else 0.0
 
-def common_neighbors_score(a, b, hist, current_time):
-    na = set(hist.get_recent_neighbors(a, current_time))
-    nb = set(hist.get_recent_neighbors(b, current_time))
-    return len(na.intersection(nb))
-
-# def edgebank 
-
-# def poptrack 
+def edgebank_score(u, v, edgebank):
+    return 1.0 if edgebank.exists(u, v) else 0.0
 
 
-def interpolated_score(a, b, current_time, hist, centrality, alpha=0.5, beta=0.3, gamma=0.2):
-    return (alpha * thas_score(a, b, current_time, hist, centrality) +
-            beta * edgebank_score(a, b, current_time, hist) +
-            gamma * poptrack_score(a, b, hist, current_time))
+def poptrack_score(u, v, poptrack):
+    return poptrack.get(u) * poptrack.get(v)
+
+
+def full_interpolated_score(u, v, t, hist, centrality, edgebank, poptrack,
+                            alpha=0.4, beta=0.3, gamma=0.3):
+    return (
+        alpha * thas_score(u, v, t, hist, centrality)
+        + beta * edgebank_score(u, v, edgebank)
+        + gamma * poptrack_score(u, v, poptrack)
+    )
 
 
 def sample_negative(u, all_nodes, hist, num_samples=10):
-    # change to add time awareness, popularity awareness, dynamic negatives.. 
     negatives = []
     neighbors = set(v for _, v in hist.node_history[u])
     while len(negatives) < num_samples:
@@ -75,24 +112,40 @@ def sample_negative(u, all_nodes, hist, num_samples=10):
     return negatives
 
 
-for (u, v, t) in interactions:
-    pos_score = interpolated_score(u, v, t, hist, centrality)
-    scores.append(pos_score)
+# --- Synthetic Mini-Dataset for Demo (can be replaced with real one) ---
+
+interactions = [(0, 1, 1), (1, 2, 2), (2, 3, 3), (0, 3, 4), (4, 1, 5), (2, 4, 6)]
+all_nodes = list(set([u for u, v, t in interactions] + [v for u, v, t in interactions]))
+
+# --- Run Baseline ---
+
+hist = InteractionHistory(time_window=10)
+centrality = TemporalCentrality()
+edgebank = EdgeBank(window=10)
+poptrack = PopTrack()
+
+scores = []
+labels = []
+
+for (u, v, t) in sorted(interactions, key=lambda x: x[2]):
+    # Positive
+    score_pos = full_interpolated_score(u, v, t, hist, centrality, edgebank, poptrack)
+    scores.append(score_pos)
     labels.append(1)
 
-    # Negative samples
-    negatives = sample_negative(u, all_nodes, hist)
+    # Negative
+    negatives = sample_negative(u, all_nodes, hist, num_samples=3)
     for v_neg in negatives:
-        neg_score = interpolated_score(u, v_neg, t, hist, centrality)
-        scores.append(neg_score)
+        score_neg = full_interpolated_score(u, v_neg, t, hist, centrality, edgebank, poptrack)
+        scores.append(score_neg)
         labels.append(0)
 
-    # Update history after scoring
+    # Update
     hist.add_interaction(u, v, t)
     centrality.update(u, v, t)
+    edgebank.update(u, v, t)
+    poptrack.update(u, v)
 
-
-print("AUC:", roc_auc_score(labels, scores))
-
-# For Hits@K and MRR
-rank = rank_of_true_link_among_negatives(pos_score, neg_scores)
+# Evaluate
+auc = roc_auc_score(labels, scores)
+auc
