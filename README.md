@@ -16,8 +16,18 @@ Add THAS for multi-hub reasoning (the main problem right now is that even if thi
 
 ### Key Components
 Data Loader 
+
 -> Interaction History
+
 -> Feature Extractors (THAS, EdgeBank, PopTrack, Recency & Common Neighbours?)
+
 -> Interpolation model (experiment with weighting)
+
 -> Link Scores
+
 -> Evaluation Metrics 
+
+
+$$Score(u, v) = α * THAS(u, v)
+            + β * Edgebank(u, v)
+            + γ * PopTrack(u) * PopTrack(v)$$
