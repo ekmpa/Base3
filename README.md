@@ -6,6 +6,18 @@ Adaptive link prediction
 - PopTrack: https://github.com/temporal-graphs-negative-sampling/TGB/tree/main
 
 Mixing: 
-- (start with) simple rule-based mixing
+- (start with) simple interpolation / rule-based mixing
 - log-reg based weighting
 - bayesian weighting
+
+
+Add THAS for multi-hub reasoning (the main problem right now is that even if this is guaranteed to outdo each individually, lacks multi-hub & temporality). 
+- Might experiment with other simple heuristics suhc as recent interaction frequency.
+
+### Key Components
+Data Loader 
+-> Interaction History
+-> Feature Extractors (THAS, EdgeBank, PopTrack, Recency & Common Neighbours?)
+-> Interpolation model (experiment with weighting)
+-> Link Scores
+-> Evaluation Metrics 
