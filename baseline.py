@@ -1,5 +1,7 @@
 """
 Proposed baseline
+Edgebank code is from the DBG github; 
+https://github.com/fpour/DGB/blob/main/
 """
 from pathlib import Path
 import numpy as np

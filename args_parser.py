@@ -1,5 +1,7 @@
 """
 Parsing arguments of different scripts
+From the DBG github; 
+https://github.com/fpour/DGB/blob/main/
 """
 import argparse
 import sys
