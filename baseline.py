@@ -1,24 +1,25 @@
 """
-EdgeBank
+Proposed baseline
 """
 from pathlib import Path
 import numpy as np
-
-np.seterr(divide='ignore', invalid='ignore')
 import pandas as pd
 import random
 import time
 from sklearn.metrics import *
 from tqdm import tqdm
 import math
-from collections import Counter, defaultdict
-
+from collections import defaultdict
 from edge_sampler import RandEdgeSampler, RandEdgeSampler_adversarial
 from load_data import Data, get_data
 from args_parser import parse_args_edge_bank
 from evaluation import *
-from proofofconcept import *  # Import TemporalCentrality
+from proofofconcept import *  
 
+"""
+np settings
+"""
+np.seterr(divide='ignore', invalid='ignore')
 np.random.seed(0)
 random.seed(0)
 
@@ -238,25 +239,6 @@ def edge_bank_link_pred_batch(train_val_data, test_data, rand_sampler, args):
     avg_measures_dict = measures_df.mean()
 
     return np.mean(val_ap), np.mean(val_auc_roc), avg_measures_dict
-
-
-def combined_baseline_memory(sources_list, destinations_list, timestamps_list, memory_opt):
-    """
-    Combines EdgeBank, PopTrack, and THAS methods into a single memory mechanism.
-    """
-    # EdgeBank memory
-    edgebank_mem = edge_bank_unlimited_memory(sources_list, destinations_list)
-
-    # PopTrack memory 
-    poptrack_mem = poptrack_memory(sources_list, destinations_list)
-
-    # THAS memory 
-    thas_mem = thas_memory(sources_list, destinations_list, timestamps_list, memory_opt['w_mode'])
-
-    # Combine all memories (example: union of all memory sets)
-    combined_mem = {**edgebank_mem, **poptrack_mem, **thas_mem}
-
-    return combined_mem
 
 
 def poptrack_memory(sources_list, destinations_list, decay=0.99):

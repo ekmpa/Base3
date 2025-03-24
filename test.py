@@ -2,10 +2,8 @@ import numpy as np
 from args_parser import parse_args_edge_bank
 from edge_sampler import RandEdgeSampler, RandEdgeSampler_adversarial
 from load_data import Data, get_data
-from edge_bank_baseline import *
+from baseline import *
 from pathlib import Path
-from proofofconcept import PopTrack  # Import PopTrack
-
 
 def main():
     """
@@ -53,9 +51,6 @@ def main():
                                                         val_data.timestamps[-1], NEG_SAMPLE, seed=2)
     else:
         test_rand_sampler = RandEdgeSampler(full_data.sources, full_data.destinations, seed=2)
-
-    # Initialize PopTrack
-    poptrack = PopTrack()
 
     # executing different runs
     for i_run in range(n_runs):
