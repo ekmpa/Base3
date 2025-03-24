@@ -24,7 +24,7 @@ np.random.seed(0)
 random.seed(0)
 
 
-def predict_links(memory, edge_set, poptrack_mem, thas_hist, centrality, current_time, alpha=0.4, beta=0.3, gamma=0.3):
+def predict_links(memory, edge_set, poptrack_mem, thas_hist, centrality, current_time):
     """
     Predict whether each edge in edge_set is an actual or a dummy edge based on a 3-factor interpolation:
     - EdgeBank (memory)
@@ -158,7 +158,7 @@ def edge_bank_link_pred_end_to_end(history_data, positive_edges, negative_edges,
 
     # Generate memories
     mem_edges = edge_bank_unlimited_memory(srcs, dsts)  
-    poptrack_mem = poptrack_memory(srcs, dsts)
+    poptrack_mem = poptrack_memory(srcs, dsts, ts_list)
     thas_hist = thas_memory(srcs, dsts, ts_list, time_window=100)
 
     # Predict links
@@ -241,15 +241,22 @@ def edge_bank_link_pred_batch(train_val_data, test_data, rand_sampler, args):
     return np.mean(val_ap), np.mean(val_auc_roc), avg_measures_dict
 
 
-def poptrack_memory(sources_list, destinations_list, decay=0.99):
+def poptrack_memory(sources, destinations, timestamps, decay_base=0.99):
     """
     Generates the memory of PopTrack.
     Tracks the popularity of nodes based on their interactions.
     """
     popularity = defaultdict(float)
-    for u, v in zip(sources_list, destinations_list):
-        popularity[u] = popularity[u] * decay + 1
-        popularity[v] = popularity[v] * decay + 1
+    last_update_time = defaultdict(lambda: timestamps[0])  # initialize to first timestamp
+
+    for u, v, t in zip(sources, destinations, timestamps):
+        for node in [u, v]:
+            delta_t = t - last_update_time[node]
+            decay = decay_base ** delta_t  # exponential decay over time gap
+            popularity[node] *= decay
+            popularity[node] += 1
+            last_update_time[node] = t
+
     return popularity
 
 

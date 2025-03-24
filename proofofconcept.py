@@ -5,6 +5,50 @@ from collections import defaultdict
 import random
 from sklearn.metrics import roc_auc_score
 
+# --- Scoring Functions ---
+
+def thas_score(a, b, current_time, hist, centrality):
+    if not isinstance(hist, THASMemory):
+        thas_mem = THASMemory(time_window=100000)  # Default time window
+        for node, interactions in hist.node_history.items():
+            for t, neighbor in interactions:
+                thas_mem.add_interaction(node, neighbor, float(t))
+        hist = thas_mem
+    hubs_a = hist.get_recent_neighbors(a, current_time)
+    hubs_b = hist.get_recent_neighbors(b, current_time)
+    shared_hubs = set(hubs_a).intersection(hubs_b)
+
+    score = 0.0
+    for h in shared_hubs:
+        times_a = [current_time - t for t, v in hist.node_history[a] if v == h]
+        times_b = [current_time - t for t, v in hist.node_history[b] if v == h]
+        
+        # Skip if either list is empty
+        if not times_a or not times_b:
+            continue
+        
+        rec_a = 1.0 / max((1 + min(times_a)), 0.1)
+        rec_b = 1.0 / max((1 + min(times_b)), 0.1)
+        c = centrality.get(h)
+        score += rec_a * rec_b * c
+    return score
+
+def edgebank_score(u, v, edgebank):
+    return 1.0 if (u,v) in edgebank else 0.0
+
+def poptrack_score(u, v, poptrack):
+    return poptrack.get(u, 0) * poptrack.get(v, 0)
+
+
+def full_interpolated_score(u, v, t, hist, centrality, edgebank, poptrack,
+                            alpha=0, beta=.5, gamma=.5):
+    return (
+        alpha * thas_score(u, v, t, hist, centrality)
+        + beta * edgebank_score(u, v, edgebank)
+        + gamma * poptrack_score(u, v, poptrack)
+    )
+
+
 # --- Modules ---
 
 class EdgeTracker:
@@ -34,16 +78,10 @@ class TemporalCentrality:
         self.centrality = defaultdict(float)
 
     def update(self, u, v, t, decay_factor=0.99):
-        """
-        Updates the centrality scores for nodes u and v at time t.
-        """
         self.centrality[u] = self.centrality[u] * decay_factor + 1
         self.centrality[v] = self.centrality[v] * decay_factor + 1
 
     def get(self, node):
-        """
-        Returns the centrality score for a given node.
-        """
         return self.centrality.get(node, 0.0)
     
 class EdgeBankInf:
@@ -114,51 +152,6 @@ class THASMemory:
         """
         current_time = float(current_time)  # Ensure current_time is a Python float
         return [v for t, v in self.node_history[node] if current_time - t <= self.time_window]
-
-
-# --- Scoring Functions ---
-
-def thas_score(a, b, current_time, hist, centrality):
-    if not isinstance(hist, THASMemory):
-        thas_mem = THASMemory(time_window=100000)  # Default time window
-        for node, interactions in hist.node_history.items():
-            for t, neighbor in interactions:
-                thas_mem.add_interaction(node, neighbor, float(t))
-        hist = thas_mem
-    hubs_a = hist.get_recent_neighbors(a, current_time)
-    hubs_b = hist.get_recent_neighbors(b, current_time)
-    shared_hubs = set(hubs_a).intersection(hubs_b)
-
-    score = 0.0
-    for h in shared_hubs:
-        times_a = [current_time - t for t, v in hist.node_history[a] if v == h]
-        times_b = [current_time - t for t, v in hist.node_history[b] if v == h]
-        
-        # Skip if either list is empty
-        if not times_a or not times_b:
-            continue
-        
-        rec_a = 1.0 / max((1 + min(times_a)), 0.1)
-        rec_b = 1.0 / max((1 + min(times_b)), 0.1)
-        c = centrality.get(h)
-        score += rec_a * rec_b * c
-    return score
-
-def edgebank_score(u, v, edgebank):
-    return 1.0 if (u,v) in edgebank else 0.0
-
-
-def poptrack_score(u, v, poptrack):
-    return poptrack.get(u, 0) * poptrack.get(v, 0)
-
-
-def full_interpolated_score(u, v, t, hist, centrality, edgebank, poptrack,
-                            alpha=0, beta=0, gamma=1):
-    return (
-        alpha * thas_score(u, v, t, hist, centrality)
-        + beta * edgebank_score(u, v, edgebank)
-        + gamma * poptrack_score(u, v, poptrack)
-    )
 
 
 def sample_random_negative(u, all_nodes, hist, num_samples=100):
