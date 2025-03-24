@@ -1,6 +1,7 @@
 """
 Negative edge sampler
-From DGB Github
+From the DBG github; 
+https://github.com/fpour/DGB/blob/main/
 """
 
 import numpy as np
