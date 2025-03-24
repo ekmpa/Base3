@@ -7,6 +7,25 @@ from sklearn.metrics import roc_auc_score
 
 # --- Modules ---
 
+class EdgeTracker:
+    def __init__(self):
+        self.all_edges = set()
+        self.edge_by_time = defaultdict(set)
+        self.test_edges = set()
+
+    def add(self, u, v, t):
+        self.all_edges.add((u, v))
+        self.edge_by_time[t].add((u, v))
+
+    def is_edge_active(self, u, v, t):
+        return (u, v) in self.edge_by_time[t]
+
+    def was_edge_seen(self, u, v, current_time):
+        for ts in range(current_time):
+            if (u, v) in self.edge_by_time[ts]:
+                return True
+        return False
+    
 class InteractionHistory:
     def __init__(self, time_window=100000):
         self.time_window = time_window
