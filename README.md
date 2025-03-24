@@ -14,6 +14,11 @@ Mixing:
 Add THAS for multi-hub reasoning (the main problem right now is that even if this is guaranteed to outdo each individually, lacks multi-hub & temporality). 
 - Might experiment with other simple heuristics suhc as recent interaction frequency.
 
+### Current steps:
+- Fix Poptrack
+- Re-do THAS, currently completely off
+- Set up experiments and done! 
+
 ### Key Components
 Data Loader 
 
