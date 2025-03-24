@@ -30,26 +30,33 @@ class TemporalCentrality:
 
     def get(self, node):
         return self.centrality.get(node, 0.0)
+    
+class EdgeBankInf:
+    def __init__(self):
+        self.memory = set()
 
+    def update(self, u, v):
+        self.memory.add((u, v))
 
-class EdgeBank:
-    def __init__(self, window=100000):
-        self.edge_set = set()
+    def predict(self, u, v):
+        return 1 if (u, v) in self.memory else 0
+    
+class EdgeBankTW:
+    def __init__(self, window_size):
+        self.window_size = window_size
         self.edge_buffer = []
-        self.window = window
+        self.edge_set = set()
 
     def update(self, u, v, t):
         self.edge_buffer.append((u, v, t))
         self.edge_set.add((u, v))
-        self.edge_set.add((v, u))
 
-        while self.edge_buffer and t - self.edge_buffer[0][2] > self.window:
-            old_u, old_v, _ = self.edge_buffer.pop(0)
+        while self.edge_buffer and t - self.edge_buffer[0][2] > self.window_size:
+            old_u, old_v, old_t = self.edge_buffer.pop(0)
             self.edge_set.discard((old_u, old_v))
-            self.edge_set.discard((old_v, old_u))
 
-    def exists(self, u, v):
-        return (u, v) in self.edge_set
+    def predict(self, u, v, t):
+        return 1 if (u, v) in self.edge_set else 0
 
 
 class PopTrack:
@@ -121,7 +128,7 @@ all_nodes = list(set([u for u, v, t in interactions] + [v for u, v, t in interac
 
 hist = InteractionHistory(time_window=10)
 centrality = TemporalCentrality()
-edgebank = EdgeBank(window=10)
+edgebank = EdgeBankTW(window=10)
 poptrack = PopTrack()
 
 scores = []
