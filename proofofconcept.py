@@ -145,15 +145,15 @@ def thas_score(a, b, current_time, hist, centrality):
     return score
 
 def edgebank_score(u, v, edgebank):
-    return 1.0 if edgebank.exists(u, v) else 0.0
+    return 1.0 if (u,v) in edgebank else 0.0
 
 
 def poptrack_score(u, v, poptrack):
-    return poptrack.get(u) * poptrack.get(v)
+    return poptrack.get(u, 0) * poptrack.get(v, 0)
 
 
 def full_interpolated_score(u, v, t, hist, centrality, edgebank, poptrack,
-                            alpha=0.4, beta=0.3, gamma=0.3):
+                            alpha=0, beta=0, gamma=1):
     return (
         alpha * thas_score(u, v, t, hist, centrality)
         + beta * edgebank_score(u, v, edgebank)

@@ -35,18 +35,7 @@ def predict_links(memory, edge_set, poptrack_mem, thas_hist, centrality, current
 
     for i in range(len(destination_nodes)):
         u, v = source_nodes[i], destination_nodes[i]
-
-        # EdgeBank factor
-        edgebank_factor = 1 if (u, v) in memory else 0
-
-        # PopTrack factor
-        poptrack_factor = poptrack_mem.get(u, 0) * poptrack_mem.get(v, 0)
-
-        # THAS factor
-        thas_factor = thas_score(u, v, current_time, thas_hist, centrality)
-
-        # Interpolated score
-        score = alpha * thas_factor + beta * edgebank_factor + gamma * poptrack_factor
+        score = full_interpolated_score(u,v,current_time, thas_hist,centrality, memory,poptrack_mem)
         pred.append(score)
 
     return np.array(pred)
