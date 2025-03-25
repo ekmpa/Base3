@@ -185,7 +185,7 @@ def poptrack_score(u, v, poptrack):
 
 
 def full_interpolated_score(u, v, t, hist, centrality, edgebank, poptrack,
-                            alpha=1, beta=0, gamma=0):
+                            alpha=.3, beta=.4, gamma=.3):
     return (
         alpha * thas_score(u, v, t, hist, centrality)
         + beta * edgebank_score(u, v, edgebank)
