@@ -5,50 +5,6 @@ from collections import defaultdict
 import random
 from sklearn.metrics import roc_auc_score
 
-# --- Scoring Functions ---
-
-def thas_score(a, b, current_time, hist, centrality):
-    if not isinstance(hist, THASMemory):
-        thas_mem = THASMemory(time_window=100000)  # Default time window
-        for node, interactions in hist.node_history.items():
-            for t, neighbor in interactions:
-                thas_mem.add_interaction(node, neighbor, float(t))
-        hist = thas_mem
-    hubs_a = hist.get_recent_neighbors(a, current_time)
-    hubs_b = hist.get_recent_neighbors(b, current_time)
-    shared_hubs = set(hubs_a).intersection(hubs_b)
-
-    score = 0.0
-    for h in shared_hubs:
-        times_a = [current_time - t for t, v in hist.node_history[a] if v == h]
-        times_b = [current_time - t for t, v in hist.node_history[b] if v == h]
-        
-        # Skip if either list is empty
-        if not times_a or not times_b:
-            continue
-        
-        rec_a = 1.0 / max((1 + min(times_a)), 0.1)
-        rec_b = 1.0 / max((1 + min(times_b)), 0.1)
-        c = centrality.get(h)
-        score += rec_a * rec_b * c
-    return score
-
-def edgebank_score(u, v, edgebank):
-    return 1.0 if (u,v) in edgebank else 0.0
-
-def poptrack_score(u, v, poptrack):
-    return poptrack.get(u, 0) * poptrack.get(v, 0)
-
-
-def full_interpolated_score(u, v, t, hist, centrality, edgebank, poptrack,
-                            alpha=0, beta=.5, gamma=.5):
-    return (
-        alpha * thas_score(u, v, t, hist, centrality)
-        + beta * edgebank_score(u, v, edgebank)
-        + gamma * poptrack_score(u, v, poptrack)
-    )
-
-
 # --- Modules ---
 
 class EdgeTracker:
@@ -70,19 +26,52 @@ class EdgeTracker:
                 return True
         return False
     
+class InteractionHistory:
+    def __init__(self, time_window=100000):
+        self.time_window = time_window
+        self.node_history = defaultdict(list)
+
+    def add_interaction(self, u, v, t):
+        self.node_history[u].append((t, v))
+        self.node_history[v].append((t, u))
+
+    def get_recent_neighbors(self, node, current_time):
+        current_time = float(current_time)
+        neighbors = [v for t, v in self.node_history[node] if current_time - t <= self.time_window]
+        if not neighbors:
+            print(f"⚠️ No recent neighbors for node {node} at time {current_time}. Last seen at:")
+            for t, v in self.node_history[node][-5:]:  # just show last 5
+                print(f"  → {v} @ t={t}, Δt={current_time - t}")
+        return neighbors
+
+from collections import defaultdict
+
 class TemporalCentrality:
     """
-    Tracks the temporal centrality of nodes, updating their scores based on interactions over time.
+    Approximates a lightweight, temporal, influence-based centrality.
+    Node centrality grows more when connecting with already-important nodes.
     """
     def __init__(self):
         self.centrality = defaultdict(float)
 
-    def update(self, u, v, t, decay_factor=0.99):
-        self.centrality[u] = self.centrality[u] * decay_factor + 1
-        self.centrality[v] = self.centrality[v] * decay_factor + 1
+    def update(self, u, v, t, decay_factor=0.99, influence_boost=0.1):
+        """
+        Updates the centrality scores for nodes u and v at time t.
+        Each node gains more centrality when connecting to a high-centrality neighbor.
+        """
+        cu = self.centrality[u]
+        cv = self.centrality[v]
+
+        # Decay existing scores
+        self.centrality[u] = cu * decay_factor
+        self.centrality[v] = cv * decay_factor
+
+        # Boost based on neighbor influence (like mini PageRank)
+        self.centrality[u] += 1 + influence_boost * cv
+        self.centrality[v] += 1 + influence_boost * cu
 
     def get(self, node):
-        return self.centrality.get(node, 0.0)
+        return self.centrality.get(node)
     
 class EdgeBankInf:
     def __init__(self):
@@ -128,11 +117,13 @@ class PopTrack:
         return self.popularity[node]
 
 
+# --- Scoring Functions ---
+
 class THASMemory:
     """
     Tracks recent interactions within a specified time window for THAS.
     """
-    def __init__(self, time_window=100000):
+    def __init__(self, time_window=100000000):
         self.time_window = float(time_window)  # Ensure time_window is a float
         self.node_history = defaultdict(list)
 
@@ -146,13 +137,63 @@ class THASMemory:
         self.node_history[v].append((t, u))
 
     def get_recent_neighbors(self, node, current_time):
-        """
-        Returns the recent neighbors of a node within the time window.
-        Ensures that current_time is a Python float for compatibility.
-        """
-        current_time = float(current_time)  # Ensure current_time is a Python float
-        return [v for t, v in self.node_history[node] if current_time - t <= self.time_window]
+        current_time = float(current_time)
+        neighbors = [v for v in self.node_history[node]] # if current_time - t <= self.time_window]
+        return neighbors
+    
+# --- Scoring Functions ---
 
+def thas_score(u, v, t, hist: THASMemory, centrality, hop_decay=0.5, centrality_threshold=0.1, max_hops=3):
+    """
+    Influence score from u to v using multi-hop propagation (PageRank-style).
+    """
+    visited = set()
+    queue = [(u, 0, 1.0)]  # (current_node, depth, influence_weight)
+    influence_score = 0.0
+
+    while queue:
+        current, depth, influence = queue.pop(0)
+        if depth >= max_hops:
+            continue
+
+        neighbors = [
+            nbr for ts, nbr in hist.node_history.get(current, [])
+            if 0 <= t - ts <= hist.time_window and nbr not in visited
+        ]
+
+        for nbr in neighbors:
+            visited.add(nbr)
+            # Add influence only if centrality is strong enough
+            c_score = centrality.get(nbr)
+            if c_score >= centrality_threshold:
+                propagated = influence * hop_decay * c_score
+                if nbr == v:
+                    influence_score += propagated
+                else:
+                    queue.append((nbr, depth + 1, propagated))
+
+    #if influence_score > 0:
+    #    print(f"[{u}→{v}] Propagated score: {influence_score:.4f}")
+
+    return influence_score
+
+def edgebank_score(u, v, edgebank):
+    return 1.0 if (u,v) in edgebank else 0.0
+
+def poptrack_score(u, v, poptrack):
+    return poptrack.get(u, 0) * poptrack.get(v, 0)
+
+
+def full_interpolated_score(u, v, t, hist, centrality, edgebank, poptrack,
+                            alpha=1, beta=0, gamma=0):
+    return (
+        alpha * thas_score(u, v, t, hist, centrality)
+        + beta * edgebank_score(u, v, edgebank)
+        + gamma * poptrack_score(u, v, poptrack)
+    )
+
+#def poptrack_score(u, v, poptrack):
+#    return poptrack.get(u) * poptrack.get(v)
 
 def sample_random_negative(u, all_nodes, hist, num_samples=100):
     negatives = []

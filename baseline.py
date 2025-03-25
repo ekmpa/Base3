@@ -16,7 +16,7 @@ from edge_sampler import RandEdgeSampler, RandEdgeSampler_adversarial
 from load_data import Data, get_data
 from args_parser import parse_args_edge_bank
 from evaluation import *
-from proofofconcept import *  
+from proofofconcept import *
 
 """
 np settings
@@ -243,7 +243,7 @@ def edge_bank_link_pred_batch(train_val_data, test_data, rand_sampler, args):
     return np.mean(val_ap), np.mean(val_auc_roc), avg_measures_dict
 
 
-def poptrack_memory(sources, destinations, timestamps, decay_base=0.99):
+def poptrack_memory(sources, destinations, timestamps, decay_base=0.2):
     """
     Generates the memory of PopTrack.
     Tracks the popularity of nodes based on their interactions.
