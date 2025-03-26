@@ -58,6 +58,29 @@ def edge_bank_unlimited_memory(sources_list, destinations_list):
     # print(f"Info: Memory contains {len(mem_edges)} edges.")
     return mem_edges
 
+def edge_bank_infin_freq(sources_list, destinations_list):
+    """
+    generates the memory of EdgeBank_inf with frequency scores not just 
+    The memory stores every edges that it has seen
+    """
+    # generate memory
+    mem_edges = {}
+    for e_idx in range(len(sources_list)):
+        if (sources_list[e_idx], destinations_list[e_idx]) not in mem_edges:
+            mem_edges[(sources_list[e_idx], destinations_list[e_idx])] = 1
+        else: 
+            mem_edges[(sources_list[e_idx], destinations_list[e_idx])] += 1
+    # print("Info: EdgeBank memory mode: >> Unlimited Memory <<")
+    # print(f"Info: Memory contains {len(mem_edges)} edges.")
+    # normalize to 0-1 scale
+    if mem_edges:
+        max_freq = max(mem_edges.values())
+        if max_freq > 0:
+            for edge in mem_edges:
+                mem_edges[edge] /= max_freq
+
+    return mem_edges
+
 
 def edge_bank_repetition_based_memory(sources_list, destinations_list):
     """
@@ -160,6 +183,8 @@ def edge_bank_link_pred_end_to_end(history_data, positive_edges, negative_edges,
 
     # Generate memories
     mem_edges = edge_bank_unlimited_memory(srcs, dsts)  
+    #mem_edges = edge_bank_infin_freq(srcs, dsts)  
+
     poptrack_mem = poptrack_memory(srcs, dsts, ts_list)
     thas_hist = thas_memory(srcs, dsts, ts_list, time_window=100)
 

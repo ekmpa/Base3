@@ -35,15 +35,10 @@ class TemporalCentrality:
     def __init__(self):
         self.centrality = defaultdict(float)
 
-    def update(self, u, v, t, decay_factor=0.99, influence_boost=0.1):
-        """
-        Updates the centrality scores for nodes u and v at time t.
-        Each node gains more centrality when connecting to a high-centrality neighbor.
-        """
+    def update(self, u, v, t, decay_factor=0.3, influence_boost=0.1):
         cu = self.centrality[u]
         cv = self.centrality[v]
 
-        # Decay existing scores
         self.centrality[u] = cu * decay_factor
         self.centrality[v] = cv * decay_factor
 
@@ -78,10 +73,6 @@ class THASMemory:
         self.node_history = defaultdict(list)
 
     def add_interaction(self, u, v, t):
-        """
-        Adds an interaction between nodes u and v at time t.
-        Ensures that the timestamp t is stored as a Python float.
-        """
         t = float(t)  # Convert timestamp to Python float
         self.node_history[u].append((t, v))
         self.node_history[v].append((t, u))
@@ -94,6 +85,7 @@ class THASMemory:
 # --- Scoring Functions ---
 
 def soft_thas_score(u, v, t, hist, hop_decay=0.35, time_decay_lambda=0.01, max_hops=3):
+    # worse than THAS
     visited = set()
     queue = [(u, 0, 1.0)]
     influence_score = 0.0
@@ -118,10 +110,8 @@ def soft_thas_score(u, v, t, hist, hop_decay=0.35, time_decay_lambda=0.01, max_h
 
     return 1 / (1 + influence_score)
 
-def thas_score(u, v, t, hist: THASMemory, time_decay=0.3, hop_decay=0.35, max_hops=3):
-    """
-    Score how much u's multi-hop neighbors 'know' v, based on their personal edgebanks.
-    """
+def thas_score(u, v, t, hist: THASMemory, time_decay=0.99, hop_decay=0.99, max_hops=5):
+
     visited = set()
     queue = [(u, 0, 1.0)]
     influence_score = 0.0
@@ -139,7 +129,7 @@ def thas_score(u, v, t, hist: THASMemory, time_decay=0.3, hop_decay=0.35, max_ho
         for nbr in neighbors:
             visited.add(nbr)
 
-            # Look inside the *edgebank of nbr* to see if v is known
+            # Look inside relations to get peer's influence
             for ts2, peer in hist.node_history.get(nbr, []):
                 if peer == v and 0 <= t - ts2 <= hist.time_window:
                     time_weight = math.exp(-time_decay * (t - ts2))
@@ -151,13 +141,19 @@ def thas_score(u, v, t, hist: THASMemory, time_decay=0.3, hop_decay=0.35, max_ho
 def edgebank_score(u, v, edgebank):
     return 1.0 if (u,v) in edgebank else 0.0
 
+def edgebank_freq_score(u, v, edgebank):
+    if (u,v) in edgebank:
+        return edgebank[(u,v)]
+    else: 
+        return 0
+
 def poptrack_score(u, v, poptrack):
     return math.log1p(poptrack.get(v, 0))
 
 def full_interpolated_score(u, v, t, hist, centrality, edgebank, poptrack, edgebank_per_node,
-                            alpha=0, beta=0, gamma=1):
+                            alpha=.3, beta=.4, gamma=.3):
     return (
-        alpha * soft_thas_score(u, v, t, hist)
+        alpha * thas_score(u, v, t, hist)
         + beta * edgebank_score(u, v, edgebank)
         + gamma * poptrack_score(u, v, poptrack)
     )
