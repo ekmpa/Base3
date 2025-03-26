@@ -4,6 +4,7 @@ import numpy as np
 from collections import defaultdict
 import random
 from sklearn.metrics import roc_auc_score
+import math
 
 # --- Modules ---
 
@@ -26,26 +27,6 @@ class EdgeTracker:
                 return True
         return False
     
-class InteractionHistory:
-    def __init__(self, time_window=100000):
-        self.time_window = time_window
-        self.node_history = defaultdict(list)
-
-    def add_interaction(self, u, v, t):
-        self.node_history[u].append((t, v))
-        self.node_history[v].append((t, u))
-
-    def get_recent_neighbors(self, node, current_time):
-        current_time = float(current_time)
-        neighbors = [v for t, v in self.node_history[node] if current_time - t <= self.time_window]
-        if not neighbors:
-            print(f"⚠️ No recent neighbors for node {node} at time {current_time}. Last seen at:")
-            for t, v in self.node_history[node][-5:]:  # just show last 5
-                print(f"  → {v} @ t={t}, Δt={current_time - t}")
-        return neighbors
-
-from collections import defaultdict
-
 class TemporalCentrality:
     """
     Approximates a lightweight, temporal, influence-based centrality.
@@ -70,39 +51,8 @@ class TemporalCentrality:
         self.centrality[u] += 1 + influence_boost * cv
         self.centrality[v] += 1 + influence_boost * cu
 
-    def get(self, node):
-        return self.centrality.get(node)
-    
-class EdgeBankInf:
-    def __init__(self):
-        self.memory = set()
-
-    def update(self, u, v):
-        self.memory.add((u, v))
-
-    def predict(self, u, v):
-        return 1 if (u, v) in self.memory else 0
-    
-class EdgeBankTW:
-    def __init__(self, window):
-        self.window_size = window
-        self.edge_buffer = []
-        self.edge_set = set()
-
-    def update(self, u, v, t):
-        self.edge_buffer.append((u, v, t))
-        self.edge_set.add((u, v))
-
-        while self.edge_buffer and t - self.edge_buffer[0][2] > self.window_size:
-            old_u, old_v, old_t = self.edge_buffer.pop(0)
-            self.edge_set.discard((old_u, old_v))
-
-    def exists(self, u, v):
-        return (u, v) in self.edge_set
-    
-    def predict(self, u, v, t):
-        return 1 if (u, v) in self.edge_set else 0
-
+    def get(self, node, default=0.01):
+        return self.centrality.get(node, default)
 
 class PopTrack:
     def __init__(self, decay=0.99):
@@ -123,7 +73,7 @@ class THASMemory:
     """
     Tracks recent interactions within a specified time window for THAS.
     """
-    def __init__(self, time_window=100000000):
+    def __init__(self, time_window=100000):
         self.time_window = float(time_window)  # Ensure time_window is a float
         self.node_history = defaultdict(list)
 
@@ -136,23 +86,48 @@ class THASMemory:
         self.node_history[u].append((t, v))
         self.node_history[v].append((t, u))
 
-    def get_recent_neighbors(self, node, current_time):
-        current_time = float(current_time)
-        neighbors = [v for v in self.node_history[node]] # if current_time - t <= self.time_window]
-        return neighbors
+    #def get_recent_neighbors(self, node, current_time):
+    #    current_time = float(current_time)
+    #    neighbors = [v for v in self.node_history[node]] # if current_time - t <= self.time_window]
+    #    return neighbors
     
 # --- Scoring Functions ---
 
-def thas_score(u, v, t, hist: THASMemory, centrality, hop_decay=0.5, centrality_threshold=0.1, max_hops=3):
-    """
-    Influence score from u to v using multi-hop propagation (PageRank-style).
-    """
+def soft_thas_score(u, v, t, hist, hop_decay=0.35, time_decay_lambda=0.01, max_hops=3):
     visited = set()
-    queue = [(u, 0, 1.0)]  # (current_node, depth, influence_weight)
+    queue = [(u, 0, 1.0)]
     influence_score = 0.0
 
     while queue:
-        current, depth, influence = queue.pop(0)
+        current, depth, weight = queue.pop(0)
+        if depth >= max_hops:
+            continue
+
+        for ts, nbr in hist.node_history.get(current, []):
+            if nbr in visited or t - ts > hist.time_window:
+                continue
+
+            visited.add(nbr)
+            time_weight = math.exp(-time_decay_lambda * (t - ts))
+            combined_weight = weight * hop_decay * time_weight
+
+            if nbr == v:
+                influence_score += combined_weight
+
+            queue.append((nbr, depth + 1, combined_weight))
+
+    return 1 / (1 + influence_score)
+
+def thas_score(u, v, t, hist: THASMemory, time_decay=0.3, hop_decay=0.35, max_hops=3):
+    """
+    Score how much u's multi-hop neighbors 'know' v, based on their personal edgebanks.
+    """
+    visited = set()
+    queue = [(u, 0, 1.0)]
+    influence_score = 0.0
+
+    while queue:
+        current, depth, weight = queue.pop(0)
         if depth >= max_hops:
             continue
 
@@ -163,37 +138,33 @@ def thas_score(u, v, t, hist: THASMemory, centrality, hop_decay=0.5, centrality_
 
         for nbr in neighbors:
             visited.add(nbr)
-            # Add influence only if centrality is strong enough
-            c_score = centrality.get(nbr)
-            if c_score >= centrality_threshold:
-                propagated = influence * hop_decay * c_score
-                if nbr == v:
-                    influence_score += propagated
-                else:
-                    queue.append((nbr, depth + 1, propagated))
 
-    #if influence_score > 0:
-    #    print(f"[{u}→{v}] Propagated score: {influence_score:.4f}")
+            # Look inside the *edgebank of nbr* to see if v is known
+            for ts2, peer in hist.node_history.get(nbr, []):
+                if peer == v and 0 <= t - ts2 <= hist.time_window:
+                    time_weight = math.exp(-time_decay * (t - ts2))
+                    influence_score += weight * time_weight
+            queue.append((nbr, depth + 1, weight * hop_decay))
 
-    return influence_score
+    return 1 / (1 + influence_score)
 
 def edgebank_score(u, v, edgebank):
     return 1.0 if (u,v) in edgebank else 0.0
 
 def poptrack_score(u, v, poptrack):
-    return poptrack.get(u, 0) * poptrack.get(v, 0)
+    return math.log1p(poptrack.get(v, 0))
 
-
-def full_interpolated_score(u, v, t, hist, centrality, edgebank, poptrack,
-                            alpha=.3, beta=.4, gamma=.3):
+def full_interpolated_score(u, v, t, hist, centrality, edgebank, poptrack, edgebank_per_node,
+                            alpha=0, beta=0, gamma=1):
     return (
-        alpha * thas_score(u, v, t, hist, centrality)
+        alpha * soft_thas_score(u, v, t, hist)
         + beta * edgebank_score(u, v, edgebank)
         + gamma * poptrack_score(u, v, poptrack)
     )
 
-#def poptrack_score(u, v, poptrack):
-#    return poptrack.get(u) * poptrack.get(v)
+# explore GraRep (Graph Representations via Global Structural Information)
+	#	Uses higher-order adjacency powers (e.g., A, A², A³…) to capture multi-hop structure
+	#	Based on matrix factorization
 
 def sample_random_negative(u, all_nodes, hist, num_samples=100):
     negatives = []
