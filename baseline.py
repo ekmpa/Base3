@@ -17,6 +17,8 @@ from load_data import Data, get_data
 from args_parser import parse_args_edge_bank
 from evaluation import *
 from proofofconcept import *
+import csv
+import os
 
 """
 np settings
@@ -333,7 +335,7 @@ def main():
             'neg_sample': NEG_SAMPLE}
 
     # path
-    common_path = f'{Path(__file__).parents[1]}/data/data/'
+    common_path = f'{Path(__file__).parents[0]}/data'
     # ebank_log_file = "{}/ebank_logs/EdgeBank_{}_self_sup.log".format(common_path, network_name)
 
     # load data
@@ -355,30 +357,55 @@ def main():
     else:
         test_rand_sampler = RandEdgeSampler(full_data.sources, full_data.destinations, seed=2)
 
+    results_file = "all_avgs.csv"
+    write_header = not os.path.exists(results_file)
 
     # executing different runs
-    for i_run in range(n_runs):
-        print("INFO:root:****************************************")
-        for k, v in args.items():
-            print("INFO:root:{}: {}".format(k, v))
-        print ("INFO:root:Run: {}".format(i_run))
-        start_time_run = time.time()
-        inherent_ap, inherent_auc_roc, avg_measures_dict = edge_bank_link_pred_batch(tr_val_data,
-                                                                                     test_data, test_rand_sampler,
-                                                                                     args)
-        print('INFO:root:Test statistics: Old nodes -- auc_inherent: {}'.format(inherent_auc_roc))
-        print('INFO:root:Test statistics: Old nodes -- ap_inherent: {}'.format(inherent_ap))
-        # extra performance measures
-        # Note: just prints out for the Test set! in transductive setting
-        for measure_name, measure_value in avg_measures_dict.items():
-            print ('INFO:root:Test statistics: Old nodes -- {}: {}'.format(measure_name, measure_value))
+    with open(results_file, mode='a', newline='') as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(["dataset", "neg_sample", "run", "auc_roc", "ap"] + ["avg_" + k for k in ["precision", "recall", "f1", "acc"]])  # Adjust keys if needed
 
-        elapse_time = time.time() - start_time_run
-        print('INFO:root:EdgeBank: Run: {}, Elapsed time: {}'.format(i_run, elapse_time))
-        print('INFO:root:****************************************')
+        for i_run in range(n_runs):
+            print("INFO:root:****************************************")
+            for k, v in args.items():
+                print(f"INFO:root:{k}: {v}")
+            print(f"INFO:root:Run: {i_run}")
+
+            start_time_run = time.time()
+            inherent_ap, inherent_auc_roc, avg_measures_dict = edge_bank_link_pred_batch(
+                tr_val_data, test_data, test_rand_sampler, args)
+
+            print(f'INFO:root:Test statistics: Old nodes -- auc_inherent: {inherent_auc_roc}')
+            print(f'INFO:root:Test statistics: Old nodes -- ap_inherent: {inherent_ap}')
+            for measure_name, measure_value in avg_measures_dict.items():
+                print(f'INFO:root:Test statistics: Old nodes -- {measure_name}: {measure_value}')
+
+            elapse_time = time.time() - start_time_run
+            print(f'INFO:root:EdgeBank: Run: {i_run}, Elapsed time: {elapse_time}')
+            print("INFO:root:****************************************")
+
+            # Save to CSV
+            row = {
+                "dataset": network_name,
+                "neg_sample": NEG_SAMPLE,
+                "run": i_run,
+                "auc_inherent": inherent_auc_roc,
+                "ap_inherent": inherent_ap
+            }
+
+            for key, value in avg_measures_dict.items():
+                row[key] = value
+
+            fieldnames = list(row.keys())
+
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            if write_header:
+                writer.writeheader()
+                write_header = False  # Don't write again for next run
+            writer.writerow(row)
 
     print("===========================================================================")
-
 
 if __name__ == '__main__':
     main()
