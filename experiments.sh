@@ -10,12 +10,12 @@ N_RUNS="3"
 W_MODE="fixed"
 
 # DGB datasets (https://zenodo.org/records/7213796#.Y1cO6y8r30o)
-DATA_ARGS=("UNvote" "USLegis" "SocialEvo") # "wiki" "uci" "mooc" 
+DATA_ARGS=("wiki" "uci" "mooc" "USLegis" "SocialEvo" "UNvote") # "wiki" "uci" "mooc" 
 
 # Negative sampling modes
 SAMPLING_MODES=("rnd" "induc_nre" "hist_nre")
 
-MEM_MODES=("unlim_mem","time_window")
+MEM_MODES=("unlim_mem" "time_window")
 
 for DATA in "${DATA_ARGS[@]}"
 do

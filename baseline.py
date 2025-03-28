@@ -357,7 +357,7 @@ def main():
     else:
         test_rand_sampler = RandEdgeSampler(full_data.sources, full_data.destinations, seed=2)
 
-    results_file = "all_avgs.csv"
+    results_file = "all_stats.csv"
     write_header = not os.path.exists(results_file)
 
     # executing different runs
