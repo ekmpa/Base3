@@ -184,11 +184,16 @@ def edge_bank_link_pred_end_to_end(history_data, positive_edges, negative_edges,
         centrality.update(u, v, t)
 
     # Generate memories
-    mem_edges = edge_bank_unlimited_memory(srcs, dsts)  
+    mem_edges = edge_bank_time_window_memory(
+        srcs, dsts, ts_list,
+        window_mode=memory_opt.get("w_mode", "fixed"),
+        memory_span=memory_opt.get("memory_span", 0.25)
+    )
+    #mem_edges = edge_bank_unlimited_memory(srcs, dsts)  
     #mem_edges = edge_bank_infin_freq(srcs, dsts)  
 
     poptrack_mem = poptrack_memory(srcs, dsts, ts_list)
-    thas_hist = thas_memory(srcs, dsts, ts_list, time_window=100)
+    thas_hist = thas_memory(srcs, dsts, ts_list, time_window=10000)
 
     
     edgebank_by_node = build_edgebank_by_node(srcs, dsts)
@@ -301,7 +306,7 @@ def build_edgebank_by_node(sources_list, destinations_list):
         edgebank[v][u] += 1  # If edges are undirected; remove if directed
     return edgebank
 
-def thas_memory(sources_list, destinations_list, timestamps_list, time_window=100000):
+def thas_memory(sources_list, destinations_list, timestamps_list, time_window=500000):
     """
     Generates the memory of THAS using the THASMemory class.
     """
@@ -357,7 +362,7 @@ def main():
     else:
         test_rand_sampler = RandEdgeSampler(full_data.sources, full_data.destinations, seed=2)
 
-    results_file = "all_stats.csv"
+    results_file = "all_avgs.csv"
     write_header = not os.path.exists(results_file)
 
     # executing different runs
