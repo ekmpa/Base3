@@ -50,7 +50,7 @@ class TemporalCentrality:
         return self.centrality.get(node, default)
 
 class PopTrack:
-    def __init__(self, decay=0.99):
+    def __init__(self, decay=0.5):
         self.popularity = defaultdict(float)
         self.decay = decay
 
@@ -84,7 +84,7 @@ class THASMemory:
     
 # --- Scoring Functions ---
 
-def soft_thas_score(u, v, t, hist, hop_decay=0.35, time_decay_lambda=0.01, max_hops=3):
+def soft_thas_score(u, v, t, hist, hop_decay=0.25, time_decay_lambda=0.01, max_hops=3):
     # worse than THAS
     visited = set()
     queue = [(u, 0, 1.0)]
@@ -110,7 +110,64 @@ def soft_thas_score(u, v, t, hist, hop_decay=0.35, time_decay_lambda=0.01, max_h
 
     return 1 / (1 + influence_score)
 
-def thas_score(u, v, t, hist: THASMemory, time_decay=0.99, hop_decay=0.99, max_hops=5):
+
+def thas_score(u, v, t, hist: THASMemory, time_decay=0.99, hop_decay=0.99, max_hops=3):
+    if u not in hist.node_history:
+        return 0.0  # fully unseen node
+
+    visited = set()
+    queue = [(u, 0, 1.0)]
+    influence_score = 0.0
+
+    while queue:
+        current, depth, weight = queue.pop(0)
+        if depth >= max_hops:
+            continue
+
+        neighbors = [
+            nbr for ts, nbr in hist.node_history.get(current, [])
+            if 0 <= t - ts <= hist.time_window and nbr not in visited
+        ]
+
+        for nbr in neighbors:
+            visited.add(nbr)
+
+            for ts2, peer in hist.node_history.get(nbr, []):
+                if peer == v and 0 <= t - ts2 <= hist.time_window:
+                    time_weight = math.exp(-time_decay * (t - ts2))
+                    influence_score += weight * time_weight
+
+            queue.append((nbr, depth + 1, weight * hop_decay))
+
+    return 1 / (1 + influence_score)  # inverse style
+
+def ind_thas_score(u, v, t, hist: THASMemory, time_window=100000, time_decay=0.99):
+    """
+    Inductive THAS: uses only recent 1- and 2-hop neighbors of u
+    to estimate influence on v.
+    """
+    influence_score = 0.0
+    visited = set()
+    recent_neighbors = [
+        (ts, nbr) for ts, nbr in hist.node_history.get(u, [])
+        if 0 <= t - ts <= time_window
+    ]
+
+    for ts1, nbr1 in recent_neighbors:
+        if nbr1 == v:
+            time_weight = math.exp(-time_decay * (t - ts1))
+            influence_score += time_weight
+        visited.add(nbr1)
+
+        # Explore 2-hop neighbors of u
+        for ts2, nbr2 in hist.node_history.get(nbr1, []):
+            if nbr2 == v and 0 <= t - ts2 <= time_window:
+                time_weight = math.exp(-time_decay * (t - ts2))
+                influence_score += 0.5 * time_weight  # 2-hop decayed
+
+    return 1 / (1 + influence_score)
+
+def thas_score2(u, v, t, hist: THASMemory, time_decay=0.99, hop_decay=0.99, max_hops=3):
 
     visited = set()
     queue = [(u, 0, 1.0)]
@@ -148,45 +205,34 @@ def edgebank_freq_score(u, v, edgebank):
         return 0
 
 def poptrack_score(u, v, poptrack):
-    return math.log1p(poptrack.get(v, 0))
+    return poptrack.get(v, 0.1)#math.log1p(poptrack.get(v, 0))
 
-def full_interpolated_score(u, v, t, hist, centrality, edgebank, poptrack, edgebank_per_node,
-                            alpha=.3, beta=.4, gamma=.3):
+def full_interpolated_score(u, v, t, hist, centrality, edgebank, poptrack,
+                            alpha=0.3, beta=0.5, gamma=0.2):
+    if (u,v) not in edgebank:
+        # Likely inductive
+        alpha, beta, gamma = 0.2, 0.2, 0.6
+    else:
+        # Historical edge
+        alpha, beta, gamma = 0.3, 0.5, 0.2
+     # and even: 
+     # - more to THAS if in recent time window
+     # - more to Poptrack if popular
+     # - less to edgebank if unseen 
+    
+    #alpha, beta, gamma = 0.5, 0.5, 0 # test next
+
+    
     return (
-        alpha * thas_score(u, v, t, hist)
-        + beta * edgebank_score(u, v, edgebank)
+        alpha * ind_thas_score(u, v, t, hist)
+        + beta * edgebank_score(u, v, edgebank) # right now: running with freq
         + gamma * poptrack_score(u, v, poptrack)
+        
+        #+ delta * inductive_boost
     )
 
 # explore GraRep (Graph Representations via Global Structural Information)
 	#	Uses higher-order adjacency powers (e.g., A, A², A³…) to capture multi-hop structure
 	#	Based on matrix factorization
 
-def sample_random_negative(u, all_nodes, hist, num_samples=100):
-    negatives = []
-    neighbors = set(v for _, v in hist.node_history[u])
-    while len(negatives) < num_samples:
-        v = random.choice(all_nodes)
-        if v != u and v not in neighbors:
-            negatives.append(v)
-    return negatives
-
-
-def sample_historical_negative(t, tracker, num_samples=100):
-    seen_edges = set()
-    for ts in range(t):
-        seen_edges |= tracker.edge_by_time[ts]
-
-    current_edges = tracker.edge_by_time[t]
-    candidate_negatives = list(seen_edges - current_edges)
-    sampled = random.sample(candidate_negatives, min(num_samples, len(candidate_negatives)))
-    return sampled
-
-
-def sample_inductive_negative(t, tracker, train_cutoff_time, num_samples=100):
-    test_only_edges = tracker.all_edges - set().union(*[tracker.edge_by_time[ts] for ts in range(train_cutoff_time)])
-    current_edges = tracker.edge_by_time[t]
-    candidate_negatives = list(test_only_edges - current_edges)
-    sampled = random.sample(candidate_negatives, min(num_samples, len(candidate_negatives)))
-    return sampled
 

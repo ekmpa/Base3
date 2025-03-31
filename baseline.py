@@ -28,7 +28,7 @@ np.random.seed(0)
 random.seed(0)
 
 
-def predict_links(memory, edge_set, poptrack_mem, thas_hist, centrality, current_time, edgebank_per_node):
+def predict_links(memory, edge_set, poptrack_mem, thas_hist, centrality, current_time):
     """
     Predict whether each edge in edge_set is an actual or a dummy edge based on a 3-factor interpolation:
     - EdgeBank (memory)
@@ -40,7 +40,7 @@ def predict_links(memory, edge_set, poptrack_mem, thas_hist, centrality, current
 
     for i in range(len(destination_nodes)):
         u, v = source_nodes[i], destination_nodes[i]
-        score = full_interpolated_score(u,v,current_time, thas_hist,centrality, memory,poptrack_mem, edgebank_per_node)
+        score = full_interpolated_score(u,v,current_time, thas_hist,centrality, memory,poptrack_mem)
         pred.append(score)
 
     return np.array(pred)
@@ -187,7 +187,7 @@ def edge_bank_link_pred_end_to_end(history_data, positive_edges, negative_edges,
     mem_edges = edge_bank_time_window_memory(
         srcs, dsts, ts_list,
         window_mode=memory_opt.get("w_mode", "fixed"),
-        memory_span=memory_opt.get("memory_span", 0.25)
+        memory_span=memory_opt.get("memory_span", 0.05)
     )
     #mem_edges = edge_bank_unlimited_memory(srcs, dsts)  
     #mem_edges = edge_bank_infin_freq(srcs, dsts)  
@@ -195,12 +195,9 @@ def edge_bank_link_pred_end_to_end(history_data, positive_edges, negative_edges,
     poptrack_mem = poptrack_memory(srcs, dsts, ts_list)
     thas_hist = thas_memory(srcs, dsts, ts_list, time_window=10000)
 
-    
-    edgebank_by_node = build_edgebank_by_node(srcs, dsts)
-    
     # Predict links
-    pos_pred = predict_links(mem_edges, positive_edges, poptrack_mem, thas_hist, centrality, max(ts_list), edgebank_by_node)
-    neg_pred = predict_links(mem_edges, negative_edges, poptrack_mem, thas_hist, centrality, max(ts_list), edgebank_by_node)
+    pos_pred = predict_links(mem_edges, positive_edges, poptrack_mem, thas_hist, centrality, max(ts_list))
+    neg_pred = predict_links(mem_edges, negative_edges, poptrack_mem, thas_hist, centrality, max(ts_list))
 
     return pos_pred, neg_pred
 
@@ -278,7 +275,7 @@ def edge_bank_link_pred_batch(train_val_data, test_data, rand_sampler, args):
     return np.mean(val_ap), np.mean(val_auc_roc), avg_measures_dict
 
 
-def poptrack_memory(sources, destinations, timestamps, decay_base=0.9):
+def poptrack_memory(sources, destinations, timestamps, decay_base=0.3):
     """
     Generates the memory of PopTrack.
     Tracks the popularity of nodes based on their interactions.
@@ -296,17 +293,8 @@ def poptrack_memory(sources, destinations, timestamps, decay_base=0.9):
 
     return popularity
 
-def build_edgebank_by_node(sources_list, destinations_list):
-    """
-    Builds a dict where each node maps to a Counter of its neighbors and interaction counts.
-    """
-    edgebank = defaultdict(Counter)
-    for u, v in zip(sources_list, destinations_list):
-        edgebank[u][v] += 1
-        edgebank[v][u] += 1  # If edges are undirected; remove if directed
-    return edgebank
 
-def thas_memory(sources_list, destinations_list, timestamps_list, time_window=500000):
+def thas_memory(sources_list, destinations_list, timestamps_list, time_window=100000):
     """
     Generates the memory of THAS using the THASMemory class.
     """
