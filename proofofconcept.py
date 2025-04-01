@@ -50,7 +50,7 @@ class TemporalCentrality:
         return self.centrality.get(node, default)
 
 class PopTrack:
-    def __init__(self, decay=0.5):
+    def __init__(self, decay=0.99):
         self.popularity = defaultdict(float)
         self.decay = decay
 
@@ -84,33 +84,6 @@ class THASMemory:
     
 # --- Scoring Functions ---
 
-def soft_thas_score(u, v, t, hist, hop_decay=0.25, time_decay_lambda=0.01, max_hops=3):
-    # worse than THAS
-    visited = set()
-    queue = [(u, 0, 1.0)]
-    influence_score = 0.0
-
-    while queue:
-        current, depth, weight = queue.pop(0)
-        if depth >= max_hops:
-            continue
-
-        for ts, nbr in hist.node_history.get(current, []):
-            if nbr in visited or t - ts > hist.time_window:
-                continue
-
-            visited.add(nbr)
-            time_weight = math.exp(-time_decay_lambda * (t - ts))
-            combined_weight = weight * hop_decay * time_weight
-
-            if nbr == v:
-                influence_score += combined_weight
-
-            queue.append((nbr, depth + 1, combined_weight))
-
-    return 1 / (1 + influence_score)
-
-
 def thas_score(u, v, t, hist: THASMemory, time_decay=0.99, hop_decay=0.99, max_hops=3):
     if u not in hist.node_history:
         return 0.0  # fully unseen node
@@ -141,7 +114,7 @@ def thas_score(u, v, t, hist: THASMemory, time_decay=0.99, hop_decay=0.99, max_h
 
     return 1 / (1 + influence_score)  # inverse style
 
-def ind_thas_score(u, v, t, hist: THASMemory, time_window=100000, time_decay=0.99):
+def ind_thas_score(u, v, t, hist: THASMemory, time_window=10000, time_decay=0.99):
     """
     Inductive THAS: uses only recent 1- and 2-hop neighbors of u
     to estimate influence on v.
