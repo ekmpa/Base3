@@ -28,7 +28,7 @@ np.random.seed(0)
 random.seed(0)
 
 
-def predict_links(memory, edge_set, poptrack_mem, thas_hist, centrality, current_time):
+def predict_links(memory, edge_set, poptrack_mem, thas_hist, current_time):
     """
     Predict whether each edge in edge_set is an actual or a dummy edge based on a 3-factor interpolation:
     - EdgeBank (memory)
@@ -40,7 +40,7 @@ def predict_links(memory, edge_set, poptrack_mem, thas_hist, centrality, current
 
     for i in range(len(destination_nodes)):
         u, v = source_nodes[i], destination_nodes[i]
-        score = full_interpolated_score(u,v,current_time, thas_hist,centrality, memory,poptrack_mem)
+        score = full_interpolated_score(u,v,current_time, thas_hist, memory,poptrack_mem)
         pred.append(score)
 
     return np.array(pred)
@@ -176,28 +176,21 @@ def edge_bank_link_pred_end_to_end(history_data, positive_edges, negative_edges,
     assert (len(pos_sources) == len(pos_destinations))
     assert (len(neg_sources) == len(neg_destinations))
 
-    # Initialize centrality
-    centrality = TemporalCentrality()
-
-    # Update centrality for all edges in history
-    for u, v, t in zip(srcs, dsts, ts_list):
-        centrality.update(u, v, t)
-
     # Generate memories
     mem_edges = edge_bank_time_window_memory(
         srcs, dsts, ts_list,
         window_mode=memory_opt.get("w_mode", "fixed"),
-        memory_span=memory_opt.get("memory_span", 0.07) # this changes everything 
+        memory_span=memory_opt.get("memory_span", 0.05) # this changes everything 
     )
     #mem_edges = edge_bank_unlimited_memory(srcs, dsts)  
     #mem_edges = edge_bank_infin_freq(srcs, dsts)  
 
     poptrack_mem = poptrack_memory(srcs, dsts, ts_list)
-    thas_hist = thas_memory(srcs, dsts, ts_list, time_window=100000) 
+    thas_hist = thas_memory(srcs, dsts, ts_list, time_window=10000) 
 
     # Predict links
-    pos_pred = predict_links(mem_edges, positive_edges, poptrack_mem, thas_hist, centrality, max(ts_list))
-    neg_pred = predict_links(mem_edges, negative_edges, poptrack_mem, thas_hist, centrality, max(ts_list))
+    pos_pred = predict_links(mem_edges, positive_edges, poptrack_mem, thas_hist, max(ts_list))
+    neg_pred = predict_links(mem_edges, negative_edges, poptrack_mem, thas_hist, max(ts_list))
 
     return pos_pred, neg_pred
 

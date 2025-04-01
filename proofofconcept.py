@@ -8,25 +8,6 @@ import math
 
 # --- Modules ---
 
-class EdgeTracker:
-    def __init__(self):
-        self.all_edges = set()
-        self.edge_by_time = defaultdict(set)
-        self.test_edges = set()
-
-    def add(self, u, v, t):
-        self.all_edges.add((u, v))
-        self.edge_by_time[t].add((u, v))
-
-    def is_edge_active(self, u, v, t):
-        return (u, v) in self.edge_by_time[t]
-
-    def was_edge_seen(self, u, v, current_time):
-        for ts in range(current_time):
-            if (u, v) in self.edge_by_time[ts]:
-                return True
-        return False
-    
 class TemporalCentrality:
     """
     Approximates a lightweight, temporal, influence-based centrality.
@@ -61,9 +42,6 @@ class PopTrack:
     def get(self, node):
         return self.popularity[node]
 
-
-# --- Scoring Functions ---
-
 class THASMemory:
     """
     Tracks recent interactions within a specified time window for THAS.
@@ -84,7 +62,7 @@ class THASMemory:
     
 # --- Scoring Functions ---
 
-def ind_thas_score(u, v, t, hist: THASMemory, time_window=1000, time_decay=0.99):
+def ind_thas_score(u, v, t, hist: THASMemory, time_window=10000, time_decay=0.99):
     """
     Inductive THAS: uses only recent 1- and 2-hop neighbors of u
     to estimate influence on v.
@@ -96,11 +74,16 @@ def ind_thas_score(u, v, t, hist: THASMemory, time_window=1000, time_decay=0.99)
         if 0 <= t - ts <= time_window
     ]
 
+    short_window = 0.1 * time_window  # Short window for recent interactions
+
     for ts1, nbr1 in recent_neighbors:
         if nbr1 == v:
             time_weight = math.exp(-time_decay * (t - ts1))
+            if t - ts1 < short_window:
+                time_weight *= 1.5  # boost very recent interactions
             influence_score += time_weight
         visited.add(nbr1)
+        
 
         # Explore 2-hop neighbors of u
         for ts2, nbr2 in hist.node_history.get(nbr1, []):
@@ -122,7 +105,7 @@ def edgebank_freq_score(u, v, edgebank):
 def poptrack_score(u, v, poptrack):
     return poptrack.get(v, 0.1)#math.log1p(poptrack.get(v, 0))
 
-def full_interpolated_score(u, v, t, hist, centrality, edgebank, poptrack,
+def full_interpolated_score(u, v, t, hist, edgebank, poptrack,
                             alpha=0.3, beta=0.5, gamma=0.2):
     if (u,v) not in edgebank:
         # Likely inductive
