@@ -35,7 +35,7 @@ class TemporalCentrality:
     def __init__(self):
         self.centrality = defaultdict(float)
 
-    def update(self, u, v, t, decay_factor=0.3, influence_boost=0.1):
+    def update(self, u, v, t, decay_factor=0.99, influence_boost=0.1):
         cu = self.centrality[u]
         cv = self.centrality[v]
 
@@ -84,37 +84,7 @@ class THASMemory:
     
 # --- Scoring Functions ---
 
-def thas_score(u, v, t, hist: THASMemory, time_decay=0.99, hop_decay=0.99, max_hops=3):
-    if u not in hist.node_history:
-        return 0.0  # fully unseen node
-
-    visited = set()
-    queue = [(u, 0, 1.0)]
-    influence_score = 0.0
-
-    while queue:
-        current, depth, weight = queue.pop(0)
-        if depth >= max_hops:
-            continue
-
-        neighbors = [
-            nbr for ts, nbr in hist.node_history.get(current, [])
-            if 0 <= t - ts <= hist.time_window and nbr not in visited
-        ]
-
-        for nbr in neighbors:
-            visited.add(nbr)
-
-            for ts2, peer in hist.node_history.get(nbr, []):
-                if peer == v and 0 <= t - ts2 <= hist.time_window:
-                    time_weight = math.exp(-time_decay * (t - ts2))
-                    influence_score += weight * time_weight
-
-            queue.append((nbr, depth + 1, weight * hop_decay))
-
-    return 1 / (1 + influence_score)  # inverse style
-
-def ind_thas_score(u, v, t, hist: THASMemory, time_window=10000, time_decay=0.99):
+def ind_thas_score(u, v, t, hist: THASMemory, time_window=1000, time_decay=0.99):
     """
     Inductive THAS: uses only recent 1- and 2-hop neighbors of u
     to estimate influence on v.
@@ -137,34 +107,6 @@ def ind_thas_score(u, v, t, hist: THASMemory, time_window=10000, time_decay=0.99
             if nbr2 == v and 0 <= t - ts2 <= time_window:
                 time_weight = math.exp(-time_decay * (t - ts2))
                 influence_score += 0.5 * time_weight  # 2-hop decayed
-
-    return 1 / (1 + influence_score)
-
-def thas_score2(u, v, t, hist: THASMemory, time_decay=0.99, hop_decay=0.99, max_hops=3):
-
-    visited = set()
-    queue = [(u, 0, 1.0)]
-    influence_score = 0.0
-
-    while queue:
-        current, depth, weight = queue.pop(0)
-        if depth >= max_hops:
-            continue
-
-        neighbors = [
-            nbr for ts, nbr in hist.node_history.get(current, [])
-            if 0 <= t - ts <= hist.time_window and nbr not in visited
-        ]
-
-        for nbr in neighbors:
-            visited.add(nbr)
-
-            # Look inside relations to get peer's influence
-            for ts2, peer in hist.node_history.get(nbr, []):
-                if peer == v and 0 <= t - ts2 <= hist.time_window:
-                    time_weight = math.exp(-time_decay * (t - ts2))
-                    influence_score += weight * time_weight
-            queue.append((nbr, depth + 1, weight * hop_decay))
 
     return 1 / (1 + influence_score)
 

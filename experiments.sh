@@ -5,12 +5,12 @@ PYTHON=python3
 # Fixed args
 VAL_RATIO="0.15"
 TEST_RATIO="0.2"
-N_RUNS="5"
+N_RUNS="1"
 MEM_MODE="time_window"
 W_MODE="fixed"
 
 # DGB datasets (https://zenodo.org/records/7213796#.Y1cO6y8r30o)
-DATA_ARGS=("wiki" "uci" "USLegis" "SocialEvo" "UNvote") # "wiki" "uci" "mooc" "uci"  
+DATA_ARGS=("wiki" "uci" "mooc" "USLegis" "UNvote" "SocialEvo") # "wiki" "uci" "uci"  
 
 # Negative sampling modes
 SAMPLING_MODES=("rnd" "induc_nre" "hist_nre")
