@@ -28,7 +28,7 @@ np.random.seed(0)
 random.seed(0)
 
 
-def predict_links(memory, edge_set, poptrack_mem, thas_hist, current_time):
+def predict_links(edgebank_mem, edge_set, poptrack_model, thas_hist, current_time):
     """
     Predict whether each edge in edge_set is an actual or a dummy edge based on a 3-factor interpolation:
     - EdgeBank (memory)
@@ -37,12 +37,25 @@ def predict_links(memory, edge_set, poptrack_mem, thas_hist, current_time):
     """
     source_nodes, destination_nodes = edge_set
     pred = []
+    K = 50
+    top_k_nodes = set(poptrack_model.predict_batch(K=K)[0])
 
     for i in range(len(destination_nodes)):
         u, v = source_nodes[i], destination_nodes[i]
-        score = full_interpolated_score(u,v,current_time, thas_hist, memory,poptrack_mem)
-        pred.append(score)
 
+        # Score = 1.0 if v is in top K popular nodes, else 0.0
+        pop_score = 1.0 if v in top_k_nodes else 0.0
+
+        score = full_interpolated_score(u, v, current_time, thas_hist, edgebank_mem, pop_score)
+        pred.append(score)
+    
+    #for i in range(len(destination_nodes)):
+    #    u, v = source_nodes[i], destination_nodes[i]
+    #    pop_vector = poptrack_model.predict_batch(batch_size=len(source_nodes), node_ids=source_nodes)
+    #    score = full_interpolated_score(u, v, current_time, thas_hist, edgebank_mem, pop_vector)
+    #    pred.append(score)
+
+    poptrack_model.update_batch(destination_nodes)
     return np.array(pred)
 
 
@@ -180,18 +193,35 @@ def edge_bank_link_pred_end_to_end(history_data, positive_edges, negative_edges,
     mem_edges = edge_bank_time_window_memory(
         srcs, dsts, ts_list,
         window_mode=memory_opt.get("w_mode", "fixed"),
-        memory_span=memory_opt.get("memory_span", 0.05) # this changes everything 
+        memory_span=memory_opt.get("memory_span", 0.001) # this changes everything 
+                # putting .001 yields grave high induc results but lowers the rest
+                # trying to achieve a balance by doing shorter poptrack window 'inverse la
     )
     #mem_edges = edge_bank_unlimited_memory(srcs, dsts)  
     #mem_edges = edge_bank_infin_freq(srcs, dsts)  
+    
+    # Initialize PopTrackInterpolated model
+    num_nodes = max(
+        max(srcs), max(dsts), 
+        max(pos_sources), max(pos_destinations),
+        max(neg_sources), max(neg_destinations)
+    ) + 1
+    poptrack_model = PopTrackInterpolated(num_nodes=num_nodes, decay=0.99)
 
-    poptrack_mem = poptrack_memory(srcs, dsts, ts_list)
+    # Pretrain poptrack_model on history before test
+    for dst in dsts:
+        poptrack_model.update_batch([dst])  # simulating historical updates
+
+
+    #poptrack_mem = poptrack_memory(srcs, dsts, ts_list)
     thas_hist = thas_memory(srcs, dsts, ts_list, time_window=10000) 
 
     # Predict links
-    pos_pred = predict_links(mem_edges, positive_edges, poptrack_mem, thas_hist, max(ts_list))
-    neg_pred = predict_links(mem_edges, negative_edges, poptrack_mem, thas_hist, max(ts_list))
+    pos_pred = predict_links(mem_edges, positive_edges, poptrack_model, thas_hist, max(ts_list))
+    neg_pred = predict_links(mem_edges, negative_edges, poptrack_model, thas_hist, max(ts_list))
 
+    #print("Pos score stats:", np.min(pos_pred), np.max(pos_pred), np.mean(pos_pred))
+    #print("Neg score stats:", np.min(neg_pred), np.max(neg_pred), np.mean(neg_pred))
     return pos_pred, neg_pred
 
 

@@ -60,6 +60,34 @@ class THASMemory:
     #    neighbors = [v for v in self.node_history[node]] # if current_time - t <= self.time_window]
     #    return neighbors
     
+from collections import defaultdict
+import numpy as np
+
+class PopTrackInterpolated:
+    def __init__(self, num_nodes, decay=0.94):
+        self.decay = decay
+        self.popularity = np.zeros(int(num_nodes)) 
+
+    def predict_batch(self, K=50):
+        """
+        Returns top-K popular node indices and their corresponding popularity scores.
+        """
+        top_k_indices = np.argsort(self.popularity)[::-1][:K]
+        top_k_scores = self.popularity[top_k_indices]
+        return top_k_indices, top_k_scores
+
+    def update_batch(self, dest_nodes):
+        """
+        Apply update to the popularity vector: increment and decay.
+        """
+        for dst in dest_nodes:
+            dst = int(dst)
+            self.popularity[dst] += 1.0
+        self.popularity *= self.decay  # decay all scores
+
+def get_top_k(P, K):
+    return np.argsort(P)[::-1][:K]
+
 # --- Scoring Functions ---
 
 def ind_thas_score(u, v, t, hist: THASMemory, time_window=10000, time_decay=0.99):
@@ -80,7 +108,7 @@ def ind_thas_score(u, v, t, hist: THASMemory, time_window=10000, time_decay=0.99
         if nbr1 == v:
             time_weight = math.exp(-time_decay * (t - ts1))
             if t - ts1 < short_window:
-                time_weight *= 1.5  # boost very recent interactions
+                time_weight *= 3  # boost very recent interactions
             influence_score += time_weight
         visited.add(nbr1)
         
@@ -102,8 +130,14 @@ def edgebank_freq_score(u, v, edgebank):
     else: 
         return 0
 
-def poptrack_score(u, v, poptrack):
-    return poptrack.get(v, 0.1)#math.log1p(poptrack.get(v, 0))
+def poptrack_score(u, v, poptrack_vector, default=0.1):
+    v = int(v)  # 🔧 ensure it's a valid index
+    if v < len(poptrack_vector):
+        return poptrack_vector[v]
+    else:
+        return default
+#def poptrack_score(u, v, poptrack):
+#    return poptrack.get(v, 0.1)#math.log1p(poptrack.get(v, 0))
 
 def full_interpolated_score(u, v, t, hist, edgebank, poptrack,
                             alpha=0.3, beta=0.5, gamma=0.2):
@@ -118,13 +152,13 @@ def full_interpolated_score(u, v, t, hist, edgebank, poptrack,
      # - more to Poptrack if popular
      # - less to edgebank if unseen 
     
-    #alpha, beta, gamma = 0.5, 0.5, 0 # test next
+    #alpha, beta, gamma = 1,0,0 # test next
 
     
     return (
         alpha * ind_thas_score(u, v, t, hist)
         + beta * edgebank_score(u, v, edgebank) # right now: running with freq
-        + gamma * poptrack_score(u, v, poptrack)
+        + gamma * poptrack #poptrack_score(u, v, poptrack)
         
         #+ delta * inductive_boost
     )
