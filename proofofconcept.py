@@ -68,7 +68,7 @@ class PopTrackInterpolated:
         self.decay = decay
         self.popularity = np.zeros(int(num_nodes)) 
 
-    def predict_batch(self, K=50):
+    def predict_batch(self, K=100):
         """
         Returns top-K popular node indices and their corresponding popularity scores.
         """
@@ -90,7 +90,7 @@ def get_top_k(P, K):
 
 # --- Scoring Functions ---
 
-def ind_thas_score(u, v, t, hist: THASMemory, time_window=10000, time_decay=0.99):
+def ind_thas_score(u, v, t, hist: THASMemory, time_window=10000, time_decay=0.05):
     """
     Inductive THAS: uses only recent 1- and 2-hop neighbors of u
     to estimate influence on v.
@@ -119,7 +119,7 @@ def ind_thas_score(u, v, t, hist: THASMemory, time_window=10000, time_decay=0.99
                 time_weight = math.exp(-time_decay * (t - ts2))
                 influence_score += 0.5 * time_weight  # 2-hop decayed
 
-    return 1 / (1 + influence_score)
+    return influence_score #1 / (1 + influence_score)
 
 def edgebank_score(u, v, edgebank):
     return 1.0 if (u,v) in edgebank else 0.0
@@ -131,7 +131,7 @@ def edgebank_freq_score(u, v, edgebank):
         return 0
 
 def poptrack_score(u, v, poptrack_vector, default=0.1):
-    v = int(v)  # 🔧 ensure it's a valid index
+    v = int(v)  
     if v < len(poptrack_vector):
         return poptrack_vector[v]
     else:
@@ -141,26 +141,68 @@ def poptrack_score(u, v, poptrack_vector, default=0.1):
 
 def full_interpolated_score(u, v, t, hist, edgebank, poptrack,
                             alpha=0.3, beta=0.5, gamma=0.2):
-    if (u,v) not in edgebank:
+    #if (u,v) not in edgebank:
         # Likely inductive
-        alpha, beta, gamma = 0.2, 0.2, 0.6
-    else:
+    #    alpha, beta, gamma = 0,0.3,0.7 #0.2, 0.2, 0.6
+    #else:
         # Historical edge
-        alpha, beta, gamma = 0.3, 0.5, 0.2
+     #   alpha, beta, gamma = 0,0.7,0.3#0.3, 0.5, 0.2
      # and even: 
      # - more to THAS if in recent time window
      # - more to Poptrack if popular
      # - less to edgebank if unseen 
     
-    #alpha, beta, gamma = 1,0,0 # test next
+    #alpha, beta, gamma = 0,0,1 # test next
+    # test next: 0,0.5,0.5
 
     
     return (
         alpha * ind_thas_score(u, v, t, hist)
         + beta * edgebank_score(u, v, edgebank) # right now: running with freq
-        + gamma * poptrack #poptrack_score(u, v, poptrack)
-        
-        #+ delta * inductive_boost
+        + gamma * poptrack 
+    )
+
+def full_interpolated_score2(u, v, t, hist, edgebank, poptrack,
+                            base_alpha=0.3, base_beta=0.5, base_gamma=0.2,
+                            recent_window=10, popular_threshold=0.7):
+    alpha, beta, gamma = base_alpha, base_beta, base_gamma
+
+    historical = (u, v) in edgebank or (v, u) in edgebank  # optionally make this undirected
+    recent = False
+
+    # --- Check if (u, v) is in recent history ---
+    for ts, neigh in hist.node_history.get(u, []):
+        if neigh == v and abs(t - ts) <= recent_window:
+            recent = True
+            break
+
+    if not recent:
+        for ts, neigh in hist.node_history.get(v, []):
+            if neigh == u and abs(t - ts) <= recent_window:
+                recent = True
+                break
+
+    # --- Dynamic weight adjustment ---
+    if not historical:
+        beta *= 0.5     # De-emphasize EdgeBank
+        alpha *= 1.5    # Boost THAS
+        gamma *= 1.2    # Slight bump to popularity
+    else:
+        beta *= 1.2
+        if recent:
+            alpha *= 1.3
+
+    if poptrack > popular_threshold:
+        gamma *= 1.5
+
+    # Normalize weights
+    total = alpha + beta + gamma
+    alpha, beta, gamma = alpha / total, beta / total, gamma / total
+
+    return (
+        alpha * ind_thas_score(u, v, t, hist) +
+        beta * edgebank_score(u, v, edgebank) +
+        gamma * poptrack
     )
 
 # explore GraRep (Graph Representations via Global Structural Information)

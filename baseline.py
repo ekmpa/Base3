@@ -37,7 +37,7 @@ def predict_links(edgebank_mem, edge_set, poptrack_model, thas_hist, current_tim
     """
     source_nodes, destination_nodes = edge_set
     pred = []
-    K = 50
+    K=100
     top_k_nodes = set(poptrack_model.predict_batch(K=K)[0])
 
     for i in range(len(destination_nodes)):
@@ -46,7 +46,17 @@ def predict_links(edgebank_mem, edge_set, poptrack_model, thas_hist, current_tim
         # Score = 1.0 if v is in top K popular nodes, else 0.0
         pop_score = 1.0 if v in top_k_nodes else 0.0
 
-        score = full_interpolated_score(u, v, current_time, thas_hist, edgebank_mem, pop_score)
+        if (u,v) in edgebank_mem:
+            # more inductive
+            score = full_interpolated_score(u, v, current_time, 
+                                            thas_hist, edgebank_mem, pop_score,
+                                            alpha=0, beta=0.3, gamma=0.7)
+        else: 
+            # more historical 
+            score = full_interpolated_score(u, v, current_time,
+                                            thas_hist, edgebank_mem, pop_score,
+                                            alpha=0, beta=0.7, gamma=0.3)
+
         pred.append(score)
     
     #for i in range(len(destination_nodes)):
@@ -174,9 +184,7 @@ def edge_bank_time_window_memory(sources_list, destinations_list, timestamps_lis
     return mem_edges
 
 
-
-
-def edge_bank_link_pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt):
+def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt):
     """
     Combined baseline link prediction (EdgeBank + PopTrack + THAS)
     """
@@ -192,8 +200,8 @@ def edge_bank_link_pred_end_to_end(history_data, positive_edges, negative_edges,
     # Generate memories
     mem_edges = edge_bank_time_window_memory(
         srcs, dsts, ts_list,
-        window_mode=memory_opt.get("w_mode", "fixed"),
-        memory_span=memory_opt.get("memory_span", 0.001) # this changes everything 
+        window_mode="fixed",#memory_opt.get("w_mode", "fixed"),
+        memory_span=memory_opt.get("memory_span", 0.01) # this changes everything 
                 # putting .001 yields grave high induc results but lowers the rest
                 # trying to achieve a balance by doing shorter poptrack window 'inverse la
     )
@@ -214,7 +222,7 @@ def edge_bank_link_pred_end_to_end(history_data, positive_edges, negative_edges,
 
 
     #poptrack_mem = poptrack_memory(srcs, dsts, ts_list)
-    thas_hist = thas_memory(srcs, dsts, ts_list, time_window=10000) 
+    thas_hist = thas_memory(srcs, dsts, ts_list) 
 
     # Predict links
     pos_pred = predict_links(mem_edges, positive_edges, poptrack_model, thas_hist, max(ts_list))
@@ -225,9 +233,9 @@ def edge_bank_link_pred_end_to_end(history_data, positive_edges, negative_edges,
     return pos_pred, neg_pred
 
 
-def edge_bank_link_pred_batch(train_val_data, test_data, rand_sampler, args):
+def pred_batch(train_val_data, test_data, rand_sampler, args):
     """
-    EdgeBank link prediction: batch based
+    Batch-based link prediction
     """
     assert rand_sampler.seed is not None
     rand_sampler.reset_random_state()
@@ -281,7 +289,7 @@ def edge_bank_link_pred_batch(train_val_data, test_data, rand_sampler, args):
         }
 
         # performance evaluation
-        pos_pred, neg_pred = edge_bank_link_pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt)
+        pos_pred, neg_pred = pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt)
         pred_score = np.concatenate([pos_pred, neg_pred])
         agg_pred_score = np.concatenate([agg_pred_score, pred_score])
         assert (len(pred_score) == len(true_label)), "Lengths of predictions and true labels do not match!"
@@ -297,27 +305,7 @@ def edge_bank_link_pred_batch(train_val_data, test_data, rand_sampler, args):
 
     return np.mean(val_ap), np.mean(val_auc_roc), avg_measures_dict
 
-
-def poptrack_memory(sources, destinations, timestamps, decay_base=0.3):
-    """
-    Generates the memory of PopTrack.
-    Tracks the popularity of nodes based on their interactions.
-    """
-    popularity = defaultdict(float)
-    last_update_time = defaultdict(lambda: timestamps[0])  # initialize to first timestamp
-
-    for u, v, t in zip(sources, destinations, timestamps):
-        for node in [u, v]:
-            delta_t = t - last_update_time[node]
-            decay = decay_base ** delta_t  # exponential decay over time gap
-            popularity[node] *= decay
-            popularity[node] += 1
-            last_update_time[node] = t
-
-    return popularity
-
-
-def thas_memory(sources_list, destinations_list, timestamps_list, time_window=100000):
+def thas_memory(sources_list, destinations_list, timestamps_list, time_window=10000):
     """
     Generates the memory of THAS using the THASMemory class.
     """
@@ -389,17 +377,17 @@ def main():
             print(f"INFO:root:Run: {i_run}")
 
             start_time_run = time.time()
-            inherent_ap, inherent_auc_roc, avg_measures_dict = edge_bank_link_pred_batch(
+            inherent_ap, inherent_auc_roc, avg_measures_dict = pred_batch(
                 tr_val_data, test_data, test_rand_sampler, args)
 
-            print(f'INFO:root:Test statistics: Old nodes -- auc_inherent: {inherent_auc_roc}')
-            print(f'INFO:root:Test statistics: Old nodes -- ap_inherent: {inherent_ap}')
+            print(f'INFO:Test statistics: Old nodes -- auc_inherent: {inherent_auc_roc}')
+            print(f'INFO:Test statistics: Old nodes -- ap_inherent: {inherent_ap}')
             for measure_name, measure_value in avg_measures_dict.items():
-                print(f'INFO:root:Test statistics: Old nodes -- {measure_name}: {measure_value}')
+                print(f'INFO:Test statistics: Old nodes -- {measure_name}: {measure_value}')
 
             elapse_time = time.time() - start_time_run
-            print(f'INFO:root:EdgeBank: Run: {i_run}, Elapsed time: {elapse_time}')
-            print("INFO:root:****************************************")
+            print(f'INFO: Run: {i_run}, Elapsed time: {elapse_time}')
+            print("INFO:****************************************")
 
             # Save to CSV
             row = {
