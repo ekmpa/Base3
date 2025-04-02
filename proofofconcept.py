@@ -146,13 +146,13 @@ def full_interpolated_score(u, v, t, hist, edgebank, poptrack,
     #    alpha, beta, gamma = 0,0.3,0.7 #0.2, 0.2, 0.6
     #else:
         # Historical edge
-     #   alpha, beta, gamma = 0,0.7,0.3#0.3, 0.5, 0.2
+     #   alpha, beta, gamma = 0,0.7,0.3 #0.3, 0.5, 0.2
      # and even: 
      # - more to THAS if in recent time window
      # - more to Poptrack if popular
      # - less to edgebank if unseen 
     
-    #alpha, beta, gamma = 0,0,1 # test next
+    alpha, beta, gamma = 0,1,0 # test next
     # test next: 0,0.5,0.5
 
     

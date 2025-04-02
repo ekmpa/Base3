@@ -201,7 +201,7 @@ def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt):
     mem_edges = edge_bank_time_window_memory(
         srcs, dsts, ts_list,
         window_mode="fixed",#memory_opt.get("w_mode", "fixed"),
-        memory_span=memory_opt.get("memory_span", 0.01) # this changes everything 
+        memory_span=0.1 #memory_opt.get("memory_span", 0.01) # this changes everything 
                 # putting .001 yields grave high induc results but lowers the rest
                 # trying to achieve a balance by doing shorter poptrack window 'inverse la
     )
