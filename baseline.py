@@ -1,5 +1,9 @@
 """
-Proposed baseline
+Proposed InterBase baseline combines the logic 
+of EdgeBank and PopTrack. 
+
+See README for more.
+
 Edgebank code is from the DBG github; 
 https://github.com/fpour/DGB/blob/main/
 """
@@ -9,53 +13,47 @@ import pandas as pd
 import random
 import time
 from sklearn.metrics import *
-from tqdm import tqdm
 import math
-from collections import defaultdict, Counter
 from edge_sampler import RandEdgeSampler, RandEdgeSampler_adversarial
 from load_data import Data, get_data
 from args_parser import parse_args_edge_bank
 from evaluation import *
-from proofofconcept import *
+from interpobase import *
 import csv
 import os
 
-"""
-np settings
-"""
+
+# numpy settings
 np.seterr(divide='ignore', invalid='ignore')
 np.random.seed(0)
 random.seed(0)
 
 
-def predict_links(edgebank_mem, edge_set, poptrack_model, thas_hist, current_time):
+def predict_links(edgebank_mem, edge_set, poptrack_model, current_time):
     """
-    Predict whether each edge in edge_set is an actual or a dummy edge based on a 3-factor interpolation:
+    Predict whether each edge in edge_set is an actual or a dummy edge based on a 2-factor interpolation:
     - EdgeBank (memory)
     - PopTrack (node popularity)
-    - THAS (multi-hub measure)
     """
+
     source_nodes, destination_nodes = edge_set
     pred = []
-    K=100
+    K=100 # change to experimentation parameter - also alpha & beta
     top_k_nodes = set(poptrack_model.predict_batch(K=K)[0])
 
     for i in range(len(destination_nodes)):
         u, v = source_nodes[i], destination_nodes[i]
 
-        # Score = 1.0 if v is in top K popular nodes, else 0.0
         pop_score = 1.0 if v in top_k_nodes else 0.0
 
         if (u,v) in edgebank_mem:
             # more inductive
-            score = full_interpolated_score(u, v, current_time, 
-                                            thas_hist, edgebank_mem, pop_score,
-                                            alpha=0, beta=0.3, gamma=0.7)
+            score = full_interpolated_score(u, v, edgebank_mem, pop_score,
+                                            alpha=0.3, beta=0.7)
         else: 
             # more historical 
-            score = full_interpolated_score(u, v, current_time,
-                                            thas_hist, edgebank_mem, pop_score,
-                                            alpha=0, beta=0.7, gamma=0.3)
+            score = full_interpolated_score(u, v, edgebank_mem, pop_score,
+                                            alpha=0.7, beta=0.3)
 
         pred.append(score)
     
@@ -148,7 +146,7 @@ def time_window_edge_memory(sources_list, destinations_list, timestamps_list, st
     return mem_edges
 
 
-def edge_bank_time_window_memory(sources_list, destinations_list, timestamps_list, window_mode, memory_span=0.15):
+def edge_bank_time_window_memory(sources_list, destinations_list, timestamps_list, window_mode, memory_span=0.01):
     """
     only saves the edges seen the time time interval equal to the last time window in timestamps_list
     """
@@ -201,7 +199,7 @@ def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt):
     mem_edges = edge_bank_time_window_memory(
         srcs, dsts, ts_list,
         window_mode="fixed",#memory_opt.get("w_mode", "fixed"),
-        memory_span=0.1 #memory_opt.get("memory_span", 0.01) # this changes everything 
+        memory_span=0.01 #memory_opt.get("memory_span", 0.01) # this changes everything 
                 # putting .001 yields grave high induc results but lowers the rest
                 # trying to achieve a balance by doing shorter poptrack window 'inverse la
     )
@@ -214,22 +212,17 @@ def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt):
         max(pos_sources), max(pos_destinations),
         max(neg_sources), max(neg_destinations)
     ) + 1
-    poptrack_model = PopTrackInterpolated(num_nodes=num_nodes, decay=0.99)
+
+    poptrack_model = PopTrackInterpolated(num_nodes=num_nodes, decay=0.25)
 
     # Pretrain poptrack_model on history before test
     for dst in dsts:
         poptrack_model.update_batch([dst])  # simulating historical updates
 
-
-    #poptrack_mem = poptrack_memory(srcs, dsts, ts_list)
-    thas_hist = thas_memory(srcs, dsts, ts_list) 
-
     # Predict links
-    pos_pred = predict_links(mem_edges, positive_edges, poptrack_model, thas_hist, max(ts_list))
-    neg_pred = predict_links(mem_edges, negative_edges, poptrack_model, thas_hist, max(ts_list))
+    pos_pred = predict_links(mem_edges, positive_edges, poptrack_model, max(ts_list))
+    neg_pred = predict_links(mem_edges, negative_edges, poptrack_model, max(ts_list))
 
-    #print("Pos score stats:", np.min(pos_pred), np.max(pos_pred), np.mean(pos_pred))
-    #print("Neg score stats:", np.min(neg_pred), np.max(neg_pred), np.mean(neg_pred))
     return pos_pred, neg_pred
 
 
@@ -304,15 +297,6 @@ def pred_batch(train_val_data, test_data, rand_sampler, args):
     avg_measures_dict = measures_df.mean()
 
     return np.mean(val_ap), np.mean(val_auc_roc), avg_measures_dict
-
-def thas_memory(sources_list, destinations_list, timestamps_list, time_window=10000):
-    """
-    Generates the memory of THAS using the THASMemory class.
-    """
-    thas_mem = THASMemory(time_window)
-    for u, v, t in zip(sources_list, destinations_list, timestamps_list):
-        thas_mem.add_interaction(u, v, t)
-    return thas_mem
 
 def main():
     """
