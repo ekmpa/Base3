@@ -22,14 +22,34 @@ from interpobase import *
 import csv
 import os
 
+#import py_tgb as tgb
+from tgb.linkproppred.dataset import LinkPropPredDataset
+
 
 # numpy settings
 np.seterr(divide='ignore', invalid='ignore')
 np.random.seed(0)
 random.seed(0)
 
+def mean_reciprocal_rank(pos_scores, neg_scores_list):
+    """
+    Compute Mean Reciprocal Rank (MRR) for a batch of positive edges.
+    
+    pos_scores: np.array of shape (batch_size,)
+    neg_scores_list: np.array of shape (batch_size, num_neg)
+    """
+    batch_size = pos_scores.shape[0]
+    num_neg = neg_scores_list.shape[1]
+    reciprocal_ranks = []
 
-def predict_links(edgebank_mem, edge_set, poptrack_model, current_time):
+    for i in range(batch_size):
+        all_scores = np.append(neg_scores_list[i], pos_scores[i])  # pos score goes at end
+        rank = np.argsort(-all_scores).tolist().index(num_neg) + 1  # index of pos score
+        reciprocal_ranks.append(1.0 / rank)
+
+    return np.mean(reciprocal_ranks)
+
+def predict_links(edgebank_mem, edge_set, poptrack_model, current_time, poptrack_K):
     """
     Predict whether each edge in edge_set is an actual or a dummy edge based on a 2-factor interpolation:
     - EdgeBank (memory)
@@ -38,8 +58,7 @@ def predict_links(edgebank_mem, edge_set, poptrack_model, current_time):
 
     source_nodes, destination_nodes = edge_set
     pred = []
-    K=100 # change to experimentation parameter - also alpha & beta
-    top_k_nodes = set(poptrack_model.predict_batch(K=K)[0])
+    top_k_nodes = set(poptrack_model.predict_batch(K=poptrack_K)[0])
 
     for i in range(len(destination_nodes)):
         u, v = source_nodes[i], destination_nodes[i]
@@ -182,7 +201,7 @@ def edge_bank_time_window_memory(sources_list, destinations_list, timestamps_lis
     return mem_edges
 
 
-def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt):
+def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt, poptrack_K):
     srcs = history_data.sources
     dsts = history_data.destinations
     ts_list = history_data.timestamps
@@ -216,8 +235,8 @@ def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt):
         poptrack_model.update_batch([dst])  # simulating historical updates
 
     # Predict links
-    pos_pred = predict_links(mem_edges, positive_edges, poptrack_model, max(ts_list))
-    neg_pred = predict_links(mem_edges, negative_edges, poptrack_model, max(ts_list))
+    pos_pred = predict_links(mem_edges, positive_edges, poptrack_model, max(ts_list), poptrack_K)
+    neg_pred = predict_links(mem_edges, negative_edges, poptrack_model, max(ts_list), poptrack_K)
 
     return pos_pred, neg_pred
 
@@ -231,6 +250,8 @@ def pred_batch(train_val_data, test_data, rand_sampler, args):
         rand_sampler.reset_random_state()
 
     TEST_BATCH_SIZE = args['batch_size']
+    POPTRACK_K = int(args['K'])
+
     num_test_instance = len(test_data.sources)
     num_test_batch = math.ceil(num_test_instance / TEST_BATCH_SIZE)
 
@@ -306,17 +327,29 @@ def pred_batch(train_val_data, test_data, rand_sampler, args):
         }
 
         # performance evaluation
-        pos_pred, neg_pred = pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt)
+        pos_pred, neg_pred = pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt, POPTRACK_K)
+
+        batch_size = len(pos_pred)
+        num_neg = len(neg_pred) // batch_size
+        neg_scores = neg_pred.reshape((batch_size, num_neg))
+
+        # Compute MRR
+        mrr_score = mean_reciprocal_rank(pos_pred, neg_scores)
+
+        # Concatenate predictions and labels
         pred_score = np.concatenate([pos_pred, neg_pred])
         agg_pred_score = np.concatenate([agg_pred_score, pred_score])
-        assert (len(pred_score) == len(true_label)), "Lengths of predictions and true labels do not match!"
+        assert len(pred_score) == len(true_label), "Lengths of predictions and true labels do not match!"
 
+        # Standard metrics
         val_ap.append(average_precision_score(true_label, pred_score))
         val_auc_roc.append(roc_auc_score(true_label, pred_score))
 
-        # extra performance measures
+        # Extra measures + add MRR
         measures_dict = extra_measures(true_label, pred_score)
+        measures_dict["mrr"] = mrr_score 
         measures_list.append(measures_dict)
+
     measures_df = pd.DataFrame(measures_list)
     avg_measures_dict = measures_df.mean()
 
@@ -326,7 +359,153 @@ def pred_batch(train_val_data, test_data, rand_sampler, args):
 
     return np.mean(val_ap), np.mean(val_auc_roc), avg_measures_dict
 
+
+def split_raw_data(raw_data, val_ratio=0.15, test_ratio=0.2):
+    total = len(raw_data['sources'])
+    num_val = int(total * val_ratio)
+    num_test = int(total * test_ratio)
+    num_train = total - num_val - num_test
+
+    sorted_idx = np.argsort(raw_data['timestamps'])
+    for k in ['sources', 'destinations', 'timestamps', 'edge_idxs', 'edge_label']:
+        raw_data[k] = raw_data[k][sorted_idx]
+
+    def slice(start, end):
+        return Data(
+            sources=raw_data['sources'][start:end],
+            destinations=raw_data['destinations'][start:end],
+            timestamps=raw_data['timestamps'][start:end],
+            edge_idxs=raw_data['edge_idxs'][start:end],
+            labels=raw_data['edge_label'][start:end]
+        )
+
+    return slice(0, num_train), slice(num_train, num_train + num_val), slice(num_train + num_val, total)
+
+
 def main():
+    print("===========================================================================")
+    cm_args = parse_args_edge_bank()
+    print("===========================================================================")
+
+    network_name = cm_args.data
+    val_ratio = cm_args.val_ratio
+    test_ratio = cm_args.test_ratio
+    n_runs = cm_args.n_runs
+    NEG_SAMPLE = cm_args.neg_sample
+    learn_through_time = True
+
+    args = {
+        'network_name': network_name,
+        'n_runs': n_runs,
+        'val_ratio': val_ratio,
+        'test_ratio': test_ratio,
+        'm_mode': cm_args.mem_mode,
+        'w_mode': cm_args.w_mode,
+        'K': cm_args.k_val,
+        'learn_through_time': learn_through_time,
+        'batch_size': 200,
+        'neg_sample': NEG_SAMPLE
+    }
+
+    print(f"INFO: Loading TGDB dataset: {network_name}")
+    os.environ["TGB_AUTOMATIC_DOWNLOAD"] = "1"
+    tgb_dataset = LinkPropPredDataset(name=network_name, root="datasets", preprocess=True)
+    data = tgb_dataset.full_data
+    print("DEBUG: Keys in full_data:", data.keys())
+
+    train_data, val_data, test_data = split_raw_data(data, val_ratio, test_ratio)
+
+    full_data = Data(
+        sources=np.concatenate([train_data.sources, val_data.sources, test_data.sources]),
+        destinations=np.concatenate([train_data.destinations, val_data.destinations, test_data.destinations]),
+        timestamps=np.concatenate([train_data.timestamps, val_data.timestamps, test_data.timestamps]),
+        edge_idxs=np.concatenate([train_data.edge_idxs, val_data.edge_idxs, test_data.edge_idxs]),
+        labels=np.concatenate([train_data.labels, val_data.labels, test_data.labels])
+    )
+
+    tr_val_data = Data(
+        sources=np.concatenate([train_data.sources, val_data.sources]),
+        destinations=np.concatenate([train_data.destinations, val_data.destinations]),
+        timestamps=np.concatenate([train_data.timestamps, val_data.timestamps]),
+        edge_idxs=np.concatenate([train_data.edge_idxs, val_data.edge_idxs]),
+        labels=np.concatenate([train_data.labels, val_data.labels])
+    )
+
+    if NEG_SAMPLE == 'rp_ns':
+        print("INFO: Using Recently Popular Negative Sampling (RP-NS)")
+        test_rand_sampler = None
+    elif NEG_SAMPLE != 'rnd':
+        print(f"INFO: Negative Edge Sampling: {NEG_SAMPLE}")
+        test_rand_sampler = RandEdgeSampler_adversarial(
+            full_data.sources, full_data.destinations, full_data.timestamps,
+            val_data.timestamps[-1], NEG_SAMPLE, seed=2
+        )
+    else:
+        test_rand_sampler = RandEdgeSampler(full_data.sources, full_data.destinations, seed=2)
+
+    results_file = "experiments.csv"
+    write_header = not os.path.exists(results_file)
+
+    with open(results_file, mode='a', newline='') as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow([
+                "dataset", "neg_sample", "run", "auc_inherent", "ap_inherent",
+                "ap", "au_roc_score", "opt_thr_au_roc", "acc_auroc_opt_thr",
+                "prec_auroc_opt_thr", "rec_auroc_opt_thr", "f1_auroc_opt_thr",
+                "au_pr_score", "opt_thr_au_pr", "acc_aupr_opt_thr", "prec_aupr_opt_thr",
+                "rec_aupr_opt_thr", "f1_aupr_opt_thr", "acc_thr_0.5", "prec_thr_0.5",
+                "rec_thr_0.5", "f1_thr_0.5", "validation_mrr", "test_mrr"
+            ])
+
+        for i_run in range(n_runs):
+            print("INFO:root:****************************************")
+            for k, v in args.items():
+                print(f"INFO:root:{k}: {v}")
+            print(f"INFO:root:Run: {i_run}")
+
+            start_time_run = time.time()
+
+            # Evaluate on validation set only
+            val_ap, val_auc_roc, val_measures_dict = pred_batch(
+                train_data, val_data, test_rand_sampler, args
+            )
+
+            # Evaluate on test set only
+            test_ap, test_auc_roc, test_measures_dict = pred_batch(
+                tr_val_data, test_data, test_rand_sampler, args
+            )
+
+            print(f'INFO: Validation -- MRR: {val_measures_dict["mrr"]}')
+            print(f'INFO: Test -- MRR: {test_measures_dict["mrr"]}')
+
+            elapsed_time = time.time() - start_time_run
+            print(f'INFO: Run: {i_run}, Elapsed time: {elapsed_time}')
+            print("INFO:****************************************")
+
+            row = {
+                "dataset": network_name,
+                "neg_sample": NEG_SAMPLE,
+                "run": i_run,
+                "auc_inherent": test_auc_roc,
+                "ap_inherent": test_ap,
+                "validation_mrr": val_measures_dict.get("mrr", None),
+                "test_mrr": test_measures_dict.get("mrr", None)
+            }
+            row.update(test_measures_dict)
+
+            fieldnames = list(row.keys())
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+
+            if write_header:
+                writer.writeheader()
+                write_header = False
+
+            writer.writerow(row)
+
+    print("===========================================================================")
+
+def main2():
     """
     EdgeBank main execution procedure
     """
@@ -346,6 +525,7 @@ def main():
             'test_ratio': test_ratio,
             'm_mode': cm_args.mem_mode,
             'w_mode': cm_args.w_mode,
+            'K': cm_args.k_val,
             'learn_through_time': learn_through_time,
             'batch_size': 200,
             'neg_sample': NEG_SAMPLE}
@@ -378,14 +558,19 @@ def main():
     else:
         test_rand_sampler = RandEdgeSampler(full_data.sources, full_data.destinations, seed=2)
 
-    results_file = "all_avgs.csv"
+    results_file = "experiments.csv"
     write_header = not os.path.exists(results_file)
 
     # executing different runs
     with open(results_file, mode='a', newline='') as f:
         writer = csv.writer(f)
         if write_header:
-            writer.writerow(["dataset", "neg_sample", "run", "auc_roc", "ap"] + ["avg_" + k for k in ["precision", "recall", "f1", "acc"]])  # Adjust keys if needed
+            writer.writerow(["dataset", "neg_sample", "run", "auc_inherent", "ap_inherent", 
+                            "ap","au_roc_score","opt_thr_au_roc","acc_auroc_opt_thr",
+                            "prec_auroc_opt_thr","rec_auroc_opt_thr","f1_auroc_opt_thr",
+                            "au_pr_score","opt_thr_au_pr","acc_aupr_opt_thr","prec_aupr_opt_thr",
+                            "rec_aupr_opt_thr","f1_aupr_opt_thr","acc_thr_0.5","prec_thr_0.5",
+                            "rec_thr_0.5","f1_thr_0.5", "mrr"])
 
         for i_run in range(n_runs):
             print("INFO:root:****************************************")
@@ -406,7 +591,6 @@ def main():
             print(f'INFO: Run: {i_run}, Elapsed time: {elapse_time}')
             print("INFO:****************************************")
 
-            # Save to CSV
             row = {
                 "dataset": network_name,
                 "neg_sample": NEG_SAMPLE,

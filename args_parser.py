@@ -24,8 +24,10 @@ def parse_args_edge_bank():
     parser.add_argument('--w_mode', type=str, default='fixed',
                         help='In time interval-based memory, how to select time window size.',
                         choices=['fixed', 'avg_reoccur'])
-    parser.add_argument('--neg_sample', type=str, default='rnd', choices=['rnd', 'hist_nre', 'induc_nre'],
+    parser.add_argument('--neg_sample', type=str, default='rnd', choices=['rnd', 'hist_nre', 'induc_nre', 'rp_ns'],
                         help='Strategy for the negative edge sampling.')
+    parser.add_argument('--k_val', type=str, default='100', choices=['50', '100', '500'],
+                        help='K value for PopTrack.')
 
     try:
         args = parser.parse_args()

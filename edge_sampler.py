@@ -204,9 +204,9 @@ class RandEdgeSampler_adversarial(object):
         """
         'src_list', 'dst_list', 'ts_list' are related to the full data! All possible edges in train, validation, test
         """
-        if not (NEG_SAMPLE == 'hist_nre' or NEG_SAMPLE == 'induc_nre'):
+        if NEG_SAMPLE not in ['hist_nre', 'induc_nre', 'rp_ns']:
             raise ValueError("Undefined Negative Edge Sampling Strategy!")
-
+        
         self.seed = None
         self.neg_sample = NEG_SAMPLE
         self.rnd_sample_ratio = rnd_sample_ratio
@@ -302,6 +302,10 @@ class RandEdgeSampler_adversarial(object):
         negative_dst_l = np.concatenate([neg_e_dst, non_repeating_e_dst_l[nre_e_index]])
 
         return negative_src_l, negative_dst_l
+    
+    def reset_random_state(self, seed=0):
+        np.random.seed(seed)
+        random.seed(seed)
 
     def sample_induc_NRE(self, size, pos_src, pos_dst, current_split_start_ts, current_split_end_ts):
         """
@@ -334,5 +338,56 @@ class RandEdgeSampler_adversarial(object):
 
         return negative_src_l, negative_dst_l
 
-    def reset_random_state(self):
-        self.random_state = np.random.RandomState(self.seed)
+import numpy as np
+
+def recently_popular_negative_sampling(
+    size,
+    src_nodes_all,
+    dst_nodes_all,
+    ts_all,
+    current_time,
+    pos_src,
+    pos_dst,
+    time_window=1e9,
+    power=0.75,
+    pop_ratio=0.9,
+    seed=None
+):
+    """
+    Recently Popular Negative Sampling (RP-NS) with fallback rate tracking
+    Returns:
+    - negative_srcs, negative_dsts: sampled negative edge arrays
+    - was_fallback: True if fallback to uniform was used
+    """
+
+    if seed is not None:
+        np.random.seed(seed)
+
+    dst_nodes_distinct = np.unique(dst_nodes_all)
+    src_nodes_distinct = np.unique(src_nodes_all)
+
+    # Step 1: Get recently active destination nodes
+    recent_mask = (ts_all >= (current_time - time_window)) & (ts_all <= current_time)
+    recent_dsts = dst_nodes_all[recent_mask]
+
+    if len(recent_dsts) == 0:
+        # Fallback to uniform
+        negative_srcs = np.random.choice(src_nodes_distinct, size=size, replace=True)
+        negative_dsts = np.random.choice(dst_nodes_distinct, size=size, replace=True)
+        return negative_srcs, negative_dsts, True  # was_fallback = True
+
+    # Step 2: Compute popularity distribution
+    unique_dsts, counts = np.unique(recent_dsts, return_counts=True)
+    popularity_probs = counts ** power
+    popularity_probs = popularity_probs / popularity_probs.sum()
+
+    # Step 3: Sample from popularity + uniform
+    n_pop = int(size * pop_ratio)
+    n_uni = size - n_pop
+
+    sampled_dst_pop = np.random.choice(unique_dsts, size=n_pop, p=popularity_probs, replace=True)
+    sampled_dst_uni = np.random.choice(dst_nodes_distinct, size=n_uni, replace=True)
+    negative_dsts = np.concatenate([sampled_dst_pop, sampled_dst_uni])
+    negative_srcs = np.random.choice(src_nodes_distinct, size=size, replace=True)
+
+    return negative_srcs, negative_dsts, False  # was_fallback = False
