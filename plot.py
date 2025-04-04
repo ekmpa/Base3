@@ -13,7 +13,8 @@ def process_file(filename):
     neg_sample_map = {
         "rnd": "Standard",
         "hist_nre": "Historical",
-        "induc_nre": "Inductive"
+        "induc_nre": "Inductive",
+        "rp_ns": "RP-NS"
     }
     df["Setting"] = df["neg_sample"].map(neg_sample_map)
 
@@ -23,7 +24,7 @@ def process_file(filename):
 
 # Patterns for each method
 method_patterns = {
-    "Base3": "base3_*.csv",
+    "InterBase": "base3_*.csv",
     "EdgeBank": "edgebank_*.csv",
     "PopTrack": "poptrack_*.csv"
 }
@@ -52,7 +53,8 @@ for method, pattern in method_patterns.items():
 
     if best_df is not None:
         version = os.path.splitext(os.path.basename(best_file))[0]
-        label = f"{method} ({version})"
+        label = method  # Simpler label, without filename
+        print(f"Selected best version for {method}: {best_file}")
         best_df["Method"] = label
         version_labels[method] = label
         all_best_dfs.append(best_df)
@@ -60,8 +62,8 @@ for method, pattern in method_patterns.items():
 # Combine all selected best versions
 full_df = pd.concat(all_best_dfs, ignore_index=True)
 
-# --- Plot 1: Per-dataset performance for Base3 ---
-base_label = version_labels.get("Base3", "Base3")
+# --- Plot 1: Per-dataset performance for InterBase ---
+base_label = version_labels.get("InterBase", "InterBase")
 base_df = full_df[full_df["Method"] == base_label]
 setting_avg = base_df.groupby("Setting", as_index=False)["auc_roc"].mean()
 
@@ -75,8 +77,8 @@ ax = sns.barplot(
     palette="Set2"
 )
 
-for container in ax.containers:
-    ax.bar_label(container, fmt="%.2f", label_type="edge", fontsize=8)
+#for container in ax.containers:
+   # ax.bar_label(container, fmt="%.2f", label_type="edge", fontsize=8)
 
 for i, row in setting_avg.iterrows():
     setting = row["Setting"]
@@ -92,7 +94,7 @@ plt.xlabel("")
 plt.ylim(0, 1)
 plt.legend(title="", loc="lower center", bbox_to_anchor=(0.5, -0.25), ncol=4)
 plt.tight_layout()
-plt.title(f"Per-dataset performance for {base_label}")
+plt.title("Per-dataset performance for InterBase")
 plt.show()
 
 # --- Plot 2: Compare all best versions ---

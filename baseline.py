@@ -14,7 +14,7 @@ import random
 import time
 from sklearn.metrics import *
 import math
-from edge_sampler import RandEdgeSampler, RandEdgeSampler_adversarial
+from edge_sampler import RandEdgeSampler, RandEdgeSampler_adversarial, recently_popular_negative_sampling
 from load_data import Data, get_data
 from args_parser import parse_args_edge_bank
 from evaluation import *
@@ -183,9 +183,6 @@ def edge_bank_time_window_memory(sources_list, destinations_list, timestamps_lis
 
 
 def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt):
-    """
-    Combined baseline link prediction (EdgeBank + PopTrack + THAS)
-    """
     srcs = history_data.sources
     dsts = history_data.destinations
     ts_list = history_data.timestamps
@@ -198,10 +195,9 @@ def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt):
     # Generate memories
     mem_edges = edge_bank_time_window_memory(
         srcs, dsts, ts_list,
-        window_mode="fixed",#memory_opt.get("w_mode", "fixed"),
-        memory_span=0.01 #memory_opt.get("memory_span", 0.01) # this changes everything 
-                # putting .001 yields grave high induc results but lowers the rest
-                # trying to achieve a balance by doing shorter poptrack window 'inverse la
+        window_mode="avg_reoccur",#memory_opt.get("w_mode", "fixed"),
+            # test with rp_ns
+        memory_span=0.01 #memory_opt.get("eb_mem_span", 0.01) 
     )
     #mem_edges = edge_bank_unlimited_memory(srcs, dsts)  
     #mem_edges = edge_bank_infin_freq(srcs, dsts)  
@@ -230,8 +226,9 @@ def pred_batch(train_val_data, test_data, rand_sampler, args):
     """
     Batch-based link prediction
     """
-    assert rand_sampler.seed is not None
-    rand_sampler.reset_random_state()
+    if rand_sampler is not None:
+        assert rand_sampler.seed is not None
+        rand_sampler.reset_random_state()
 
     TEST_BATCH_SIZE = args['batch_size']
     num_test_instance = len(test_data.sources)
@@ -239,6 +236,9 @@ def pred_batch(train_val_data, test_data, rand_sampler, args):
 
     agg_pred_score, agg_true_label = [], []
     val_ap, val_auc_roc, measures_list = [], [], []
+
+    fallback_count = 0
+    total_batches = 0
 
     # for k in tqdm(range(num_test_batch)):
     for k in range(num_test_batch):
@@ -251,13 +251,37 @@ def pred_batch(train_val_data, test_data, rand_sampler, args):
         positive_edges = (sources_batch, destinations_batch)
 
         size = len(sources_batch)  # number of negative edges
-        if rand_sampler.neg_sample != 'rnd':
-            src_negative_samples, dst_negative_samples = rand_sampler.sample(size, sources_batch, destinations_batch,
-                                                                             timestamps_batch[0],
-                                                                             timestamps_batch[-1])
+        if rand_sampler is None and args['neg_sample'] == 'rp_ns':
+            src_negative_samples, dst_negative_samples, was_fallback = recently_popular_negative_sampling(
+                size=size,
+                src_nodes_all=train_val_data.sources,
+                dst_nodes_all=train_val_data.destinations,
+                ts_all=train_val_data.timestamps,
+                current_time=timestamps_batch[-1],
+                pos_src=sources_batch,
+                pos_dst=destinations_batch,
+                seed=2
+            )
+            fallback_count += int(was_fallback)
+            total_batches += 1
+        elif rand_sampler.neg_sample != 'rnd':
+            src_negative_samples, dst_negative_samples = rand_sampler.sample(
+                size, sources_batch, destinations_batch,
+                timestamps_batch[0], timestamps_batch[-1]
+            )
         else:
-            src_negative_samples, dst_negative_samples = rand_sampler.sample(size, sources_batch, destinations_batch)
-            src_negative_samples = sources_batch  # similar to what baselines do
+            src_negative_samples, dst_negative_samples = rand_sampler.sample(
+                size, sources_batch, destinations_batch
+            )
+            src_negative_samples = sources_batch
+        
+        #if rand_sampler.neg_sample != 'rnd':
+        #    src_negative_samples, dst_negative_samples = rand_sampler.sample(size, sources_batch, destinations_batch,
+        #                                                                     timestamps_batch[0],
+        #                                                                     timestamps_batch[-1])
+        #else:
+        #    src_negative_samples, dst_negative_samples = rand_sampler.sample(size, sources_batch, destinations_batch)
+        #    src_negative_samples = sources_batch  # similar to what baselines do
 
         negative_edges = (src_negative_samples, dst_negative_samples)
 
@@ -295,6 +319,10 @@ def pred_batch(train_val_data, test_data, rand_sampler, args):
         measures_list.append(measures_dict)
     measures_df = pd.DataFrame(measures_list)
     avg_measures_dict = measures_df.mean()
+
+    if args['neg_sample'] == 'rp_ns' and total_batches > 0:
+        rate = 100 * fallback_count / total_batches
+        print(f"RP-NS fallback used in {fallback_count}/{total_batches} batches ({rate:.2f}%)")
 
     return np.mean(val_ap), np.mean(val_auc_roc), avg_measures_dict
 
@@ -338,7 +366,12 @@ def main():
                        np.concatenate([train_data.labels, val_data.labels]))
 
     # define negative edge sampler
-    if NEG_SAMPLE != 'rnd':
+    if NEG_SAMPLE == 'rp_ns':
+        print("INFO: Using Recently Popular Negative Sampling (RP-NS)")
+        # RP-NS is handled directly during sampling time via the function,
+        # so no need to create a sampler object here
+        test_rand_sampler = None   
+    elif NEG_SAMPLE != 'rnd':
         print("INFO: Negative Edge Sampling: {}".format(NEG_SAMPLE))
         test_rand_sampler = RandEdgeSampler_adversarial(full_data.sources, full_data.destinations, full_data.timestamps,
                                                         val_data.timestamps[-1], NEG_SAMPLE, seed=2)
