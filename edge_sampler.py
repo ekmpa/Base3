@@ -5,7 +5,7 @@ https://github.com/fpour/DGB/blob/main/
 """
 
 import numpy as np
-
+import random
 
 class RandEdgeSampler_original(object):
     """
