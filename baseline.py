@@ -14,7 +14,7 @@ import random
 import time
 from sklearn.metrics import *
 import math
-from edge_sampler import RandEdgeSampler, RandEdgeSampler_adversarial, recently_popular_negative_sampling
+from edge_sampler import RandEdgeSampler, RandEdgeSampler_adversarial, recently_popular_negative_sampling, LazyRandEdgeSampler
 from load_data import Data, get_data
 from args_parser import parse_args_edge_bank
 from evaluation import *
@@ -22,6 +22,10 @@ from interpobase import *
 from sklearn.preprocessing import MinMaxScaler
 import csv
 import os
+import gc
+#import psutil
+
+os.environ["TGB_AUTOMATIC_DOWNLOAD"] = "1"
 
 #import py_tgb as tgb
 from tgb.linkproppred.dataset import LinkPropPredDataset
@@ -31,6 +35,19 @@ from tgb.linkproppred.evaluate import Evaluator
 np.seterr(divide='ignore', invalid='ignore')
 np.random.seed(0)
 random.seed(0)
+
+
+import builtins
+builtins.input = lambda *args, **kwargs: "y"
+
+#from google.cloud import storage
+
+#def upload_to_gcs(bucket_name, source_file_name, destination_blob_name):
+    #client = storage.Client()
+    #bucket = client.bucket(bucket_name)
+    #blob = bucket.blob(destination_blob_name)
+    #blob.upload_from_filename(source_file_name)
+    #print(f"✅ Uploaded {source_file_name} to gs://{bucket_name}/{destination_blob_name}")
 
 def predict_links(edgebank_mem, edge_set, poptrack_model, timestamps_batch,
                   poptrack_K, thas_mem, step_mem):
@@ -45,12 +62,8 @@ def predict_links(edgebank_mem, edge_set, poptrack_model, timestamps_batch,
         u, v = source_nodes[i], destination_nodes[i]
         t = timestamps_batch[i]
 
-        if (u,v) in edgebank_mem:
-            score = full_interpolated_score(u, v, t, edgebank_mem, poptrack_model, top_k_nodes, step_mem,
-                                        alpha=0.5, beta=0.2, delta=0.3)
-        else:
-            score = full_interpolated_score(u, v, t, edgebank_mem, poptrack_model, top_k_nodes, step_mem,
-                                        alpha=0.2, beta=0.3, delta=0.5)
+        score = full_interpolated_score(u, v, t, edgebank_mem, poptrack_model, top_k_nodes, step_mem) 
+
         pred.append(score)
 
     poptrack_model.update_batch(
@@ -193,7 +206,6 @@ def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt, po
     mem_edges = edge_bank_time_window_memory(
         srcs, dsts, ts_list,
         window_mode="avg_reoccur", #memory_opt.get("w_mode", "fixed"),
-            # test with rp_ns
         memory_span=0.01 #memory_opt.get("eb_mem_span", 0.01) 
     )
     #mem_edges = edge_bank_unlimited_memory(srcs, dsts)  
@@ -291,7 +303,7 @@ def pred_batch(train_val_data, test_data, rand_sampler, args, evaluator):
             src_negative_samples, dst_negative_samples = rand_sampler.sample(
                 size, sources_batch, destinations_batch
             )
-            src_negative_samples = sources_batch
+            #src_negative_samples = sources_batch
         
         negative_edges = (src_negative_samples, dst_negative_samples)
 
@@ -327,7 +339,7 @@ def pred_batch(train_val_data, test_data, rand_sampler, args, evaluator):
             "y_pred_neg": neg_pred,
             "eval_metric": ["hits@", "mrr"],
         })
-        #print("EVAL", tgb_metrics)
+        print("EVAL", tgb_metrics)
 
         # Concatenate predictions and labels
         pred_score = np.concatenate([pos_pred, neg_pred])
@@ -358,7 +370,7 @@ def pred_batch(train_val_data, test_data, rand_sampler, args, evaluator):
 
     return np.mean(val_ap), np.mean(val_auc_roc), merged_metrics
 
-def main():
+def main2():
     print("===========================================================================")
     cm_args = parse_args_edge_bank()
     print("===========================================================================")
@@ -383,32 +395,19 @@ def main():
         'neg_sample': NEG_SAMPLE
     }
 
-    print(f"INFO: Loading TGB dataset: {network_name}")
-    os.environ["TGB_AUTOMATIC_DOWNLOAD"] = "1"
-    tgb_dataset = LinkPropPredDataset(name=network_name, root="datasets", preprocess=True)
+    print(f"INFO: Loading dataset: {network_name}")
 
-    full_data = tgb_dataset.full_data
-    print("DEBUG: Keys in full_data:", full_data.keys())
+    node_feats, edge_feats, full_data, train_data, val_data, test_data, nn_val_data, nn_test_data = get_data(
+        common_path=Path("data"),
+        dataset_name=network_name,
+        val_ratio=val_ratio,
+        test_ratio=test_ratio,
+        different_new_nodes_between_val_and_test=False,
+        randomize_features=False,
+        nn_test_ratio=0.1
+    )
 
-    # Use TGB official masks
-    train_mask = tgb_dataset.train_mask
-    val_mask = tgb_dataset.val_mask
-    test_mask = tgb_dataset.test_mask
-
-    def extract_data(mask):
-        return Data(
-            sources=full_data['sources'][mask],
-            destinations=full_data['destinations'][mask],
-            timestamps=full_data['timestamps'][mask],
-            edge_idxs=full_data['edge_idxs'][mask],
-            labels=full_data['edge_label'][mask]
-        )
-
-    train_data = extract_data(train_mask)
-    val_data = extract_data(val_mask)
-    test_data = extract_data(test_mask)
-
-    # Combined sets
+    # Combine training + validation sets
     tr_val_data = Data(
         sources=np.concatenate([train_data.sources, val_data.sources]),
         destinations=np.concatenate([train_data.destinations, val_data.destinations]),
@@ -417,13 +416,8 @@ def main():
         labels=np.concatenate([train_data.labels, val_data.labels])
     )
 
-    full_data_combined = Data(
-        sources=full_data['sources'],
-        destinations=full_data['destinations'],
-        timestamps=full_data['timestamps'],
-        edge_idxs=full_data['edge_idxs'],
-        labels=full_data['edge_label']
-    )
+    # Full dataset (already in correct format)
+    full_data_combined = full_data
 
     # Sampling
     if NEG_SAMPLE == 'rp_ns':
@@ -439,12 +433,12 @@ def main():
         test_rand_sampler = RandEdgeSampler(full_data_combined.sources, full_data_combined.destinations, seed=2)
 
     results_file = "experiments.csv"
-    write_header = True #not os.path.exists(results_file)
+    write_header = not os.path.exists(results_file)
 
     with open(results_file, mode='a', newline='') as f:
         writer = csv.writer(f)
         if write_header:
-            fieldnames = ["dataset", "neg_sample", "run",
+            fieldnames = ["dataset", "neg_sample", "run","K",
                             "val_mrr", "val_ap", "val_au_roc_score",
                             "test_mrr", "test_ap", "test_au_roc_score"
                             ]
@@ -481,6 +475,7 @@ def main():
                 "dataset": network_name,
                 "neg_sample": NEG_SAMPLE,
                 "run": i_run,
+                "K": args['K'], 
                 "val_mrr": val_measures_dict.get("mrr"),
                 "val_ap": val_ap,
                 "val_au_roc_score": val_auc_roc,
@@ -499,6 +494,246 @@ def main():
             writer.writerow(row)
 
     print("===========================================================================")
+
+
+def main():
+    print("===========================================================================")
+    cm_args = parse_args_edge_bank()
+    print("===========================================================================")
+
+    network_name = cm_args.data
+    val_ratio = cm_args.val_ratio
+    test_ratio = cm_args.test_ratio
+    n_runs = cm_args.n_runs
+    NEG_SAMPLE = cm_args.neg_sample
+    learn_through_time = True
+
+    args = {
+        'network_name': network_name,
+        'n_runs': n_runs,
+        'val_ratio': val_ratio,
+        'test_ratio': test_ratio,
+        'm_mode': cm_args.mem_mode,
+        'w_mode': cm_args.w_mode,
+        'K': cm_args.k_val,
+        'learn_through_time': learn_through_time,
+        'batch_size': 50, # untested 200,
+        'neg_sample': NEG_SAMPLE
+    }
+
+    print(f"INFO: Loading TGB dataset: {network_name}")
+    os.environ["TGB_AUTOMATIC_DOWNLOAD"] = "1"
+    tgb_dataset = LinkPropPredDataset(name=network_name, root="datasets", preprocess=True)
+
+    full_data = tgb_dataset.full_data
+    full_data = {
+        key: val.astype(np.int32) if val.dtype == np.int64 else val
+        for key, val in tgb_dataset.full_data.items()
+    }
+    #print("DEBUG: Keys in full_data:", full_data.keys())
+
+    # Use TGB official masks
+    train_mask = tgb_dataset.train_mask
+    val_mask = tgb_dataset.val_mask
+    test_mask = tgb_dataset.test_mask
+
+    def extract_data(mask):
+        return Data(
+            sources=full_data['sources'][mask],
+            destinations=full_data['destinations'][mask],
+            timestamps=full_data['timestamps'][mask],
+            edge_idxs=full_data['edge_idxs'][mask],
+            labels=full_data['edge_label'][mask]
+        )
+
+    train_data = extract_data(train_mask)
+    val_data = extract_data(val_mask)
+    test_data = extract_data(test_mask)
+
+    # Combined sets
+    #tr_val_data = Data(
+     #   sources=np.concatenate([train_data.sources, val_data.sources]),
+      #  destinations=np.concatenate([train_data.destinations, val_data.destinations]),
+       # timestamps=np.concatenate([train_data.timestamps, val_data.timestamps]),
+        #edge_idxs=np.concatenate([train_data.edge_idxs, val_data.edge_idxs]),
+    #    labels=np.concatenate([train_data.labels, val_data.labels])
+    #)
+
+    def truncate_data(data, n=1_000_000):
+        idx = np.random.choice(len(data.sources), size=min(n, len(data.sources)), replace=False)
+        return Data(
+            sources=data.sources[idx],
+            destinations=data.destinations[idx],
+            timestamps=data.timestamps[idx],
+            edge_idxs=data.edge_idxs[idx],
+            labels=data.labels[idx]
+        )
+
+    def truncate_early(data, n):
+        return Data(
+            sources=data.sources[:n],
+            destinations=data.destinations[:n],
+            timestamps=data.timestamps[:n],
+            edge_idxs=data.edge_idxs[:n],
+            labels=data.labels[:n]
+        )
+
+    #train_data = truncate_data(train_data)
+    #val_data = truncate_data(val_data)
+    #test_data = truncate_data(test_data)
+    train_data = truncate_early(train_data, n=1_000_000)
+    val_data = truncate_early(val_data, n=500_000)  # keep it smaller than test
+    test_data = truncate_early(test_data, n=500_000)
+
+    tr_val_data = Data(
+        sources=np.concatenate([train_data.sources, val_data.sources]),
+        destinations=np.concatenate([train_data.destinations, val_data.destinations]),
+        timestamps=np.concatenate([train_data.timestamps, val_data.timestamps]),
+        edge_idxs=np.concatenate([train_data.edge_idxs, val_data.edge_idxs]),
+        labels=np.concatenate([train_data.labels, val_data.labels])
+    )
+
+    #full_data_combined = Data(
+    #    sources=full_data['sources'],
+    #    destinations=full_data['destinations'],
+    #    timestamps=full_data['timestamps'],
+    #    edge_idxs=full_data['edge_idxs'],
+    #    labels=full_data['edge_label']
+    #)
+    
+    #print("DEBUG: Full data size:", len(full_data_combined.sources))
+    
+
+    print("DEBUG: Creating sampler")
+
+    
+    #print(f"[DEBUG] Memory used: {psutil.virtual_memory().used / 1024 ** 3:.2f} GiB")
+
+
+    # Don’t build full_data_combined — just extract sampler inputs
+    all_sources = full_data['sources']
+    all_destinations = full_data['destinations']
+    all_timestamps = full_data['timestamps']
+
+    # idx = np.random.choice(len(all_sources), size=500_000, replace=False)
+    #all_sources_trunc = all_sources[idx]
+    #all_destinations_trunc = all_destinations[idx]
+    #all_timestamps_trunc = all_timestamps[idx]
+
+    # Optional: Free large full_data dictionary to reclaim memory
+    #del full_data
+    #gc.collect()
+
+    #print(f"[DEBUG] Memory used: {psutil.virtual_memory().used / 1024 ** 3:.2f} GiB")
+
+    if NEG_SAMPLE == 'rp_ns':
+        print("INFO: Using Recently Popular Negative Sampling (RP-NS)")
+        test_rand_sampler = None
+    elif NEG_SAMPLE != 'rnd':
+        print(f"INFO: Negative Edge Sampling: {NEG_SAMPLE}")
+        test_rand_sampler = RandEdgeSampler_adversarial(
+            all_sources, all_destinations, all_timestamps,
+            val_data.timestamps[-1], NEG_SAMPLE, seed=2
+        )
+    else:
+        print(f"INFO: Negative Edge Sampling: {NEG_SAMPLE}")
+        test_rand_sampler = RandEdgeSampler(all_sources, all_destinations, seed=2)
+
+    results_file = "experiments.csv"
+    write_header = True
+
+    # Sampling
+    #if NEG_SAMPLE == 'rp_ns':
+     #   print("INFO: Using Recently Popular Negative Sampling (RP-NS)")
+      #  test_rand_sampler = None
+    #elif NEG_SAMPLE != 'rnd':
+     #   print(f"INFO: Negative Edge Sampling: {NEG_SAMPLE}")
+      #  test_rand_sampler = RandEdgeSampler_adversarial(
+       #     full_data_combined.sources, full_data_combined.destinations, full_data_combined.timestamps,
+        #    val_data.timestamps[-1], NEG_SAMPLE, seed=2
+        #)
+    #else:
+        #full_data_combined.sources = full_data_combined.sources[:500_000]
+        #full_data_combined.destinations = full_data_combined.destinations[:500_000]
+        # below 2 -> for RAM? untested
+        #full_data_combined.sources = full_data_combined.sources.astype(np.int32)
+        #full_data_combined.destinations = full_data_combined.destinations.astype(np.int32)
+      #  test_rand_sampler = RandEdgeSampler(full_data_combined.sources, full_data_combined.destinations, seed=2)
+        
+    #results_file = "experiments.csv"
+    #write_header = True #not os.path.exists(results_file)
+
+    #print(f"[DEBUG] Memory used: {psutil.virtual_memory().used / 1024 ** 3:.2f} GiB")
+
+    with open(results_file, mode='a', newline='') as f:
+        writer = csv.writer(f)
+        if write_header:
+            fieldnames = ["dataset", "neg_sample", "run","K",
+                            "val_mrr", "val_ap", "val_au_roc_score",
+                            "test_mrr", "test_ap", "test_au_roc_score"
+                            ]
+                
+            writer.writerow(fieldnames)
+        write_header = False
+
+        for i_run in range(n_runs):
+            print("INFO:root:****************************************")
+            for k, v in args.items():
+                print(f"INFO:root:{k}: {v}")
+            print(f"INFO:root:Run: {i_run}")
+
+            start_time_run = time.time()
+
+            #print(f"[DEBUG] Memory before pred_batch used: {psutil.virtual_memory().used / 1024 ** 3:.2f} GiB")
+
+            # Evaluate on validation set
+            val_ap, val_auc_roc, val_measures_dict = pred_batch(
+                train_data, val_data, test_rand_sampler, args, evaluator=Evaluator(name=network_name)
+            )
+
+            # Evaluate on test set
+            test_ap, test_auc_roc, test_measures_dict = pred_batch(
+                tr_val_data, test_data, test_rand_sampler, args, evaluator=Evaluator(name=network_name)
+            )
+
+            print(f'INFO: Validation -- MRR: {val_measures_dict.get("mrr"):.4f}')
+            print(f'INFO: Test -- MRR: {test_measures_dict.get("mrr"):.4f}')
+
+            elapsed_time = time.time() - start_time_run
+            print(f'INFO: Run: {i_run}, Elapsed time: {elapsed_time:.2f}s')
+            print("INFO:****************************************")
+
+            row = {
+                "dataset": network_name,
+                "neg_sample": NEG_SAMPLE,
+                "run": i_run,
+                "K": args['K'], 
+                "val_mrr": val_measures_dict.get("mrr"),
+                "val_ap": val_ap,
+                "val_au_roc_score": val_auc_roc,
+                "test_mrr": test_measures_dict.get("mrr"),
+                "test_ap": test_ap,
+                "test_au_roc_score": test_auc_roc
+            }
+
+            fieldnames = list(row.keys())
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+
+            if write_header:
+                writer.writeheader()
+                write_header = False
+
+            writer.writerow(row)
+
+    # Upload the results file to GCS
+    #upload_to_gcs(
+    #    bucket_name="base3-456222-results", 
+    #    source_file_name=results_file,
+    #    destination_blob_name=f"experiment_outputs/{int(time.time())}_{results_file}"
+    #)
+
+    print("===========================================================================")
+
 
 if __name__ == '__main__':
     main()

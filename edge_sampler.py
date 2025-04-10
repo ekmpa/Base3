@@ -35,14 +35,18 @@ class RandEdgeSampler_original(object):
         self.random_state = np.random.RandomState(self.seed)
 
 
-class RandEdgeSampler(object):
+class RandEdgeSamplerq(object):
 
     def __init__(self, src_list, dst_list, seed=None):
         self.seed = None
         self.neg_sample = 'rnd'  # negative edge sampling method: random edges
-        self.src_list = np.unique(src_list)
-        self.dst_list = np.unique(dst_list)
-        self.possible_edges = set([(src, dst) for src in np.unique(src_list) for dst in np.unique(dst_list)])
+        self.src_list = np.unique(np.array(src_list, dtype=np.int32))
+        self.dst_list = np.unique(np.array(dst_list, dtype=np.int32))
+
+        # Directly generate set from generator expression (no intermediate list!)
+        self.possible_edges = set(
+            (src, dst) for src in self.src_list for dst in self.dst_list
+        )
 
         if seed is not None:
             self.seed = seed
@@ -60,6 +64,42 @@ class RandEdgeSampler(object):
     def reset_random_state(self):
         self.random_state = np.random.RandomState(self.seed)
 
+# TO TEST FOR MEM!
+class RandEdgeSampler(object):
+    def __init__(self, src_list, dst_list, seed=None):
+        self.neg_sample = 'rnd'
+        self.src_list = np.unique(np.array(src_list, dtype=np.int32))
+        self.dst_list = np.unique(np.array(dst_list, dtype=np.int32))
+
+        self.seed = seed
+        self.random_state = np.random.RandomState(seed) if seed is not None else np.random
+
+    def sample(self, size, pos_src, pos_dst):
+        # Set of positive edges for fast collision checking
+        current_pos_e = set(zip(pos_src, pos_dst))
+
+        neg_src = []
+        neg_dst = []
+        attempts = 0
+        max_attempts = size * 5  # to prevent infinite loops
+
+        while len(neg_src) < size and attempts < max_attempts:
+            # Sample a candidate edge
+            u = self.random_state.choice(self.src_list)
+            v = self.random_state.choice(self.dst_list)
+            if (u, v) not in current_pos_e:
+                neg_src.append(u)
+                neg_dst.append(v)
+            attempts += 1
+
+        if len(neg_src) < size:
+            print(f"[WARN] Only generated {len(neg_src)} negative edges after {attempts} attempts.")
+
+        return neg_src, neg_dst
+
+    def reset_random_state(self):
+        if self.seed is not None:
+            self.random_state = np.random.RandomState(self.seed)
 
 class RandEdgeSampler_adversarial_original(object):
     """
@@ -391,3 +431,24 @@ def recently_popular_negative_sampling(
     negative_srcs = np.random.choice(src_nodes_distinct, size=size, replace=True)
 
     return negative_srcs, negative_dsts, False  # was_fallback = False
+
+class LazyRandEdgeSampler:
+    def __init__(self, src_list, dst_list, seed=None):
+        self.src_list = np.unique(src_list)
+        self.dst_list = np.unique(dst_list)
+        self.seed = seed
+        self.random_state = np.random.RandomState(seed) if seed is not None else None
+        self.neg_sample = 'rnd' 
+
+    def reset_random_state(self):
+        if self.seed is not None:
+            self.random_state = np.random.RandomState(self.seed)
+
+    def sample(self, size, pos_src=None, pos_dst=None, start_ts=None, end_ts=None):
+        if self.random_state is not None:
+            src_index = self.random_state.randint(0, len(self.src_list), size)
+            dst_index = self.random_state.randint(0, len(self.dst_list), size)
+        else:
+            src_index = np.random.randint(0, len(self.src_list), size)
+            dst_index = np.random.randint(0, len(self.dst_list), size)
+        return self.src_list[src_index], self.dst_list[dst_index]

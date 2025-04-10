@@ -26,7 +26,7 @@ def parse_args_edge_bank():
                         choices=['fixed', 'avg_reoccur'])
     parser.add_argument('--neg_sample', type=str, default='rnd', choices=['rnd', 'hist_nre', 'induc_nre', 'rp_ns'],
                         help='Strategy for the negative edge sampling.')
-    parser.add_argument('--k_val', type=str, default='100', choices=['50', '100', '500'],
+    parser.add_argument('--k_val', type=str, default='100', choices=['50', '100', '500', '1000', '50000'],
                         help='K value for PopTrack.')
 
     try:
