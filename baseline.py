@@ -7,25 +7,29 @@ See README for more.
 Edgebank code is from the DBG github; 
 https://github.com/fpour/DGB/blob/main/
 """
-from pathlib import Path
-import numpy as np
-import pandas as pd
-import random
-import time
-from sklearn.metrics import *
-import math
-from edge_sampler import RandEdgeSampler, RandEdgeSampler_adversarial, recently_popular_negative_sampling, LazyRandEdgeSampler
-from load_data import Data, get_data
-from args_parser import parse_args_edge_bank
-from evaluation import *
-from interpobase import *
-from sklearn.preprocessing import MinMaxScaler
-import csv
 import os
 import gc
-#import psutil
+import csv
+import math
+import time
+import random
 
-os.environ["TGB_AUTOMATIC_DOWNLOAD"] = "1"
+import numpy as np
+import pandas as pd
+from sklearn.metrics import *
+
+from load_data import Data, get_data
+from args_parser import parse_args_edge_bank
+from edge_sampler import (
+    RandEdgeSampler,
+    RandEdgeSampler_adversarial,
+    recently_popular_negative_sampling,
+    LazyRandEdgeSampler
+)
+
+from evaluation import *  
+from Base3 import *  
+#import psutil
 
 #import py_tgb as tgb
 from tgb.linkproppred.dataset import LinkPropPredDataset
@@ -36,9 +40,10 @@ np.seterr(divide='ignore', invalid='ignore')
 np.random.seed(0)
 random.seed(0)
 
+# for running in google cloud: 
 
-import builtins
-builtins.input = lambda *args, **kwargs: "y"
+#import builtins
+#builtins.input = lambda *args, **kwargs: "y"
 
 #from google.cloud import storage
 
@@ -47,10 +52,10 @@ builtins.input = lambda *args, **kwargs: "y"
     #bucket = client.bucket(bucket_name)
     #blob = bucket.blob(destination_blob_name)
     #blob.upload_from_filename(source_file_name)
-    #print(f"✅ Uploaded {source_file_name} to gs://{bucket_name}/{destination_blob_name}")
+    #print(f"Uploaded {source_file_name} to gs://{bucket_name}/{destination_blob_name}")
 
 def predict_links(edgebank_mem, edge_set, poptrack_model, timestamps_batch,
-                  poptrack_K, thas_mem, step_mem):
+                  poptrack_K, step_mem):
 
     source_nodes, destination_nodes = edge_set
     pred = []
@@ -71,6 +76,7 @@ def predict_links(edgebank_mem, edge_set, poptrack_model, timestamps_batch,
         timestamps=timestamps_batch,
         src_nodes=source_nodes 
     )
+
     return np.array(pred)
 
 
@@ -218,12 +224,9 @@ def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt, po
         max(neg_sources), max(neg_destinations)
     ) + 1
 
-    step_mem = STePMemory(time_window=1_000_000)
-    for u, v, t in zip(srcs, dsts, ts_list):
-        step_mem.update(u, v, t)
-
     current_time = max(np.max(pos_destinations), np.max(neg_destinations))
-    thas_hist = thas_memory(srcs, dsts, ts_list, current_time=current_time)
+
+    step_mem = tCoMem(srcs, dsts, ts_list, current_time, time_window=1_000_000)
     
     poptrack_model = PopTrack(num_nodes=num_nodes)
 
@@ -231,18 +234,10 @@ def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt, po
     for u, v, t in zip(srcs, dsts, ts_list):
         poptrack_model.update_batch([v], timestamps=[t], src_nodes=[u])
 
-    current_time = max(ts_list)
-    thas_hist = thas_memory(
-        sources_list=poptrack_model.history_sources,  # or srcs from history
-        destinations_list=poptrack_model.history_destinations,
-        timestamps_list=poptrack_model.history_timestamps,
-        current_time=current_time
-    )
-
     pos_pred = predict_links(mem_edges, positive_edges, poptrack_model,
-                            positive_edges[1], poptrack_K, thas_hist, step_mem)
+                            positive_edges[1], poptrack_K, step_mem)
     neg_pred = predict_links(mem_edges, negative_edges, poptrack_model,
-                            negative_edges[1], poptrack_K, thas_hist, step_mem)#pos_pred = predict_links(mem_edges, positive_edges, poptrack_model, max(ts_list), poptrack_K)
+                            negative_edges[1], poptrack_K, step_mem)#pos_pred = predict_links(mem_edges, positive_edges, poptrack_model, max(ts_list), poptrack_K)
 
     return pos_pred, neg_pred
 
@@ -312,6 +307,8 @@ def pred_batch(train_val_data, test_data, rand_sampler, args, evaluator):
         true_label = np.concatenate([pos_label, neg_label])
         agg_true_label = np.concatenate([agg_true_label, true_label])
 
+        print("done sampling")
+
         if args['learn_through_time']:
             history_data = Data(np.concatenate([train_val_data.sources, test_data.sources[: s_idx]]),
                                 np.concatenate([train_val_data.destinations, test_data.destinations[: s_idx]]),
@@ -327,12 +324,16 @@ def pred_batch(train_val_data, test_data, rand_sampler, args, evaluator):
             'w_mode': args['w_mode']
         }
 
+        print("going into pred")
+
         # performance evaluation
         pos_pred, neg_pred = pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt, POPTRACK_K)
 
         batch_size = len(pos_pred)
         num_neg = len(neg_pred) // batch_size
         neg_scores = neg_pred.reshape((batch_size, num_neg))
+
+        print("going into eval")
 
         tgb_metrics = evaluator.eval({
             "y_pred_pos": pos_pred,
@@ -369,131 +370,6 @@ def pred_batch(train_val_data, test_data, rand_sampler, args, evaluator):
         print(f"RP-NS fallback used in {fallback_count}/{total_batches} batches ({rate:.2f}%)")
 
     return np.mean(val_ap), np.mean(val_auc_roc), merged_metrics
-
-def main2():
-    print("===========================================================================")
-    cm_args = parse_args_edge_bank()
-    print("===========================================================================")
-
-    network_name = cm_args.data
-    val_ratio = cm_args.val_ratio
-    test_ratio = cm_args.test_ratio
-    n_runs = cm_args.n_runs
-    NEG_SAMPLE = cm_args.neg_sample
-    learn_through_time = True
-
-    args = {
-        'network_name': network_name,
-        'n_runs': n_runs,
-        'val_ratio': val_ratio,
-        'test_ratio': test_ratio,
-        'm_mode': cm_args.mem_mode,
-        'w_mode': cm_args.w_mode,
-        'K': cm_args.k_val,
-        'learn_through_time': learn_through_time,
-        'batch_size': 200,
-        'neg_sample': NEG_SAMPLE
-    }
-
-    print(f"INFO: Loading dataset: {network_name}")
-
-    node_feats, edge_feats, full_data, train_data, val_data, test_data, nn_val_data, nn_test_data = get_data(
-        common_path=Path("data"),
-        dataset_name=network_name,
-        val_ratio=val_ratio,
-        test_ratio=test_ratio,
-        different_new_nodes_between_val_and_test=False,
-        randomize_features=False,
-        nn_test_ratio=0.1
-    )
-
-    # Combine training + validation sets
-    tr_val_data = Data(
-        sources=np.concatenate([train_data.sources, val_data.sources]),
-        destinations=np.concatenate([train_data.destinations, val_data.destinations]),
-        timestamps=np.concatenate([train_data.timestamps, val_data.timestamps]),
-        edge_idxs=np.concatenate([train_data.edge_idxs, val_data.edge_idxs]),
-        labels=np.concatenate([train_data.labels, val_data.labels])
-    )
-
-    # Full dataset (already in correct format)
-    full_data_combined = full_data
-
-    # Sampling
-    if NEG_SAMPLE == 'rp_ns':
-        print("INFO: Using Recently Popular Negative Sampling (RP-NS)")
-        test_rand_sampler = None
-    elif NEG_SAMPLE != 'rnd':
-        print(f"INFO: Negative Edge Sampling: {NEG_SAMPLE}")
-        test_rand_sampler = RandEdgeSampler_adversarial(
-            full_data_combined.sources, full_data_combined.destinations, full_data_combined.timestamps,
-            val_data.timestamps[-1], NEG_SAMPLE, seed=2
-        )
-    else:
-        test_rand_sampler = RandEdgeSampler(full_data_combined.sources, full_data_combined.destinations, seed=2)
-
-    results_file = "experiments.csv"
-    write_header = not os.path.exists(results_file)
-
-    with open(results_file, mode='a', newline='') as f:
-        writer = csv.writer(f)
-        if write_header:
-            fieldnames = ["dataset", "neg_sample", "run","K",
-                            "val_mrr", "val_ap", "val_au_roc_score",
-                            "test_mrr", "test_ap", "test_au_roc_score"
-                            ]
-                
-            writer.writerow(fieldnames)
-        write_header = False
-
-        for i_run in range(n_runs):
-            print("INFO:root:****************************************")
-            for k, v in args.items():
-                print(f"INFO:root:{k}: {v}")
-            print(f"INFO:root:Run: {i_run}")
-
-            start_time_run = time.time()
-
-            # Evaluate on validation set
-            val_ap, val_auc_roc, val_measures_dict = pred_batch(
-                train_data, val_data, test_rand_sampler, args, evaluator=Evaluator(name=network_name)
-            )
-
-            # Evaluate on test set
-            test_ap, test_auc_roc, test_measures_dict = pred_batch(
-                tr_val_data, test_data, test_rand_sampler, args, evaluator=Evaluator(name=network_name)
-            )
-
-            print(f'INFO: Validation -- MRR: {val_measures_dict.get("mrr"):.4f}')
-            print(f'INFO: Test -- MRR: {test_measures_dict.get("mrr"):.4f}')
-
-            elapsed_time = time.time() - start_time_run
-            print(f'INFO: Run: {i_run}, Elapsed time: {elapsed_time:.2f}s')
-            print("INFO:****************************************")
-
-            row = {
-                "dataset": network_name,
-                "neg_sample": NEG_SAMPLE,
-                "run": i_run,
-                "K": args['K'], 
-                "val_mrr": val_measures_dict.get("mrr"),
-                "val_ap": val_ap,
-                "val_au_roc_score": val_auc_roc,
-                "test_mrr": test_measures_dict.get("mrr"),
-                "test_ap": test_ap,
-                "test_au_roc_score": test_auc_roc
-            }
-
-            fieldnames = list(row.keys())
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-
-            if write_header:
-                writer.writeheader()
-                write_header = False
-
-            writer.writerow(row)
-
-    print("===========================================================================")
 
 
 def main():
@@ -532,10 +408,23 @@ def main():
     }
     #print("DEBUG: Keys in full_data:", full_data.keys())
 
+    def truncate_mask(mask, pct=1.0):
+        """Truncate a mask by keeping only the first pct% of True indices."""
+        true_indices = np.where(mask)[0]
+        n_keep = int(len(true_indices) * pct)
+        truncated = np.zeros_like(mask, dtype=bool)
+        truncated[true_indices[:n_keep]] = True
+        return truncated
+
     # Use TGB official masks
     train_mask = tgb_dataset.train_mask
     val_mask = tgb_dataset.val_mask
     test_mask = tgb_dataset.test_mask
+
+    # Truncate before extracting data
+    train_mask = truncate_mask(train_mask, pct=0.4)
+    val_mask = truncate_mask(val_mask, pct=0.6)
+    test_mask = truncate_mask(test_mask, pct=0.6)
 
     def extract_data(mask):
         return Data(
@@ -569,21 +458,24 @@ def main():
             labels=data.labels[idx]
         )
 
-    def truncate_early(data, n):
+    def truncate_early(data, pct=1.0):
+        """Truncate a percentage (pct ∈ (0, 1]) of the data starting from the beginning."""
+        n_total = len(data.sources)
+        n_keep = int(n_total * pct)
         return Data(
-            sources=data.sources[:n],
-            destinations=data.destinations[:n],
-            timestamps=data.timestamps[:n],
-            edge_idxs=data.edge_idxs[:n],
-            labels=data.labels[:n]
+            sources=data.sources[:n_keep],
+            destinations=data.destinations[:n_keep],
+            timestamps=data.timestamps[:n_keep],
+            edge_idxs=data.edge_idxs[:n_keep],
+            labels=data.labels[:n_keep]
         )
 
     #train_data = truncate_data(train_data)
     #val_data = truncate_data(val_data)
     #test_data = truncate_data(test_data)
-    train_data = truncate_early(train_data, n=1_000_000)
-    val_data = truncate_early(val_data, n=500_000)  # keep it smaller than test
-    test_data = truncate_early(test_data, n=500_000)
+    #train_data = truncate_early(train_data, 0.5)
+    #val_data = truncate_early(val_data, 0.5)  # keep it smaller than test
+    #test_data = truncate_early(test_data, 0.5)
 
     tr_val_data = Data(
         sources=np.concatenate([train_data.sources, val_data.sources]),
@@ -691,12 +583,13 @@ def main():
                 train_data, val_data, test_rand_sampler, args, evaluator=Evaluator(name=network_name)
             )
 
+            print(f'INFO: Validation -- MRR: {val_measures_dict.get("mrr"):.4f}')
+
             # Evaluate on test set
             test_ap, test_auc_roc, test_measures_dict = pred_batch(
                 tr_val_data, test_data, test_rand_sampler, args, evaluator=Evaluator(name=network_name)
             )
 
-            print(f'INFO: Validation -- MRR: {val_measures_dict.get("mrr"):.4f}')
             print(f'INFO: Test -- MRR: {test_measures_dict.get("mrr"):.4f}')
 
             elapsed_time = time.time() - start_time_run
