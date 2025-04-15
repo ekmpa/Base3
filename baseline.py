@@ -1,6 +1,6 @@
 """
-Proposed InterBase baseline combines the logic 
-of EdgeBank and PopTrack. 
+Proposed Base3 baseline combines the logic 
+of EdgeBank and PopTrack, augmented with t-CoMems. 
 
 See README for more.
 
@@ -24,7 +24,8 @@ from edge_sampler import (
     RandEdgeSampler,
     RandEdgeSampler_adversarial,
     recently_popular_negative_sampling,
-    LazyRandEdgeSampler
+    LazyRandEdgeSampler,
+    RandEdgeSamplerFast
 )
 
 from evaluation import *  
@@ -39,20 +40,6 @@ from tgb.linkproppred.evaluate import Evaluator
 np.seterr(divide='ignore', invalid='ignore')
 np.random.seed(0)
 random.seed(0)
-
-# for running in google cloud: 
-
-#import builtins
-#builtins.input = lambda *args, **kwargs: "y"
-
-#from google.cloud import storage
-
-#def upload_to_gcs(bucket_name, source_file_name, destination_blob_name):
-    #client = storage.Client()
-    #bucket = client.bucket(bucket_name)
-    #blob = bucket.blob(destination_blob_name)
-    #blob.upload_from_filename(source_file_name)
-    #print(f"Uploaded {source_file_name} to gs://{bucket_name}/{destination_blob_name}")
 
 def predict_links(edgebank_mem, edge_set, poptrack_model, timestamps_batch,
                   poptrack_K, step_mem):
@@ -73,8 +60,8 @@ def predict_links(edgebank_mem, edge_set, poptrack_model, timestamps_batch,
 
     poptrack_model.update_batch(
         dest_nodes=destination_nodes,
-        timestamps=timestamps_batch,
-        src_nodes=source_nodes 
+        #timestamps=timestamps_batch,
+        #src_nodes=source_nodes 
     )
 
     return np.array(pred)
@@ -186,15 +173,9 @@ def edge_bank_time_window_memory(sources_list, destinations_list, timestamps_lis
         window_end_ts = max(timestamps_list)
         window_start_ts = window_end_ts - avg_t_interval
 
-    #print(f"Memory window: [{window_start_ts:.0f}, {window_end_ts:.0f}]")
-    # print("Info: Time window mode:", window_mode)
-    # print(f"Info: start window: {window_start_ts}, end window: {window_end_ts}, "
-    #       f"interval: {window_end_ts - window_start_ts}")
     mem_edges = time_window_edge_memory(sources_list, destinations_list, timestamps_list, start_time=window_start_ts,
                                         end_time=window_end_ts)
-    # print("Info: EdgeBank memory mode: >> Time Window Memory <<")
-    # print(f"Info: Memory contains {len(mem_edges)} edges.")
-
+    
     return mem_edges
 
 
@@ -208,16 +189,18 @@ def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt, po
     assert (len(pos_sources) == len(pos_destinations))
     assert (len(neg_sources) == len(neg_destinations))
 
+    #print("Gen memories")
+
     # Generate memories
     mem_edges = edge_bank_time_window_memory(
         srcs, dsts, ts_list,
-        window_mode="avg_reoccur", #memory_opt.get("w_mode", "fixed"),
+        window_mode="fixed", #memory_opt.get("w_mode", "fixed"),
         memory_span=0.01 #memory_opt.get("eb_mem_span", 0.01) 
     )
     #mem_edges = edge_bank_unlimited_memory(srcs, dsts)  
     #mem_edges = edge_bank_infin_freq(srcs, dsts)  
     
-    # Initialize PopTrackInterpolated model
+    # Initialize PopTrack and t-CoMem model
     num_nodes = max(
         max(srcs), max(dsts), 
         max(pos_sources), max(pos_destinations),
@@ -226,13 +209,16 @@ def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt, po
 
     current_time = max(np.max(pos_destinations), np.max(neg_destinations))
 
-    step_mem = tCoMem(srcs, dsts, ts_list, current_time, time_window=1_000_000)
+    step_mem = tCoMem(srcs, dsts, ts_list, current_time, num_nodes, time_window=1_000_000)
     
     poptrack_model = PopTrack(num_nodes=num_nodes)
+    poptrack_model.update_batch(dsts) 
+
+    #print("done memories, going to pred")
 
     # Pretrain poptrack_model on history before test
-    for u, v, t in zip(srcs, dsts, ts_list):
-        poptrack_model.update_batch([v], timestamps=[t], src_nodes=[u])
+    #for u, v, t in zip(srcs, dsts, ts_list):
+     #   poptrack_model.update_batch([v], timestamps=[t], src_nodes=[u])
 
     pos_pred = predict_links(mem_edges, positive_edges, poptrack_model,
                             positive_edges[1], poptrack_K, step_mem)
@@ -307,7 +293,6 @@ def pred_batch(train_val_data, test_data, rand_sampler, args, evaluator):
         true_label = np.concatenate([pos_label, neg_label])
         agg_true_label = np.concatenate([agg_true_label, true_label])
 
-        print("done sampling")
 
         if args['learn_through_time']:
             history_data = Data(np.concatenate([train_val_data.sources, test_data.sources[: s_idx]]),
@@ -324,7 +309,7 @@ def pred_batch(train_val_data, test_data, rand_sampler, args, evaluator):
             'w_mode': args['w_mode']
         }
 
-        print("going into pred")
+        #print("going into pred")
 
         # performance evaluation
         pos_pred, neg_pred = pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt, POPTRACK_K)
@@ -333,14 +318,14 @@ def pred_batch(train_val_data, test_data, rand_sampler, args, evaluator):
         num_neg = len(neg_pred) // batch_size
         neg_scores = neg_pred.reshape((batch_size, num_neg))
 
-        print("going into eval")
+        #print("going into eval")
 
         tgb_metrics = evaluator.eval({
             "y_pred_pos": pos_pred,
             "y_pred_neg": neg_pred,
             "eval_metric": ["hits@", "mrr"],
         })
-        print("EVAL", tgb_metrics)
+        #print("EVAL", tgb_metrics)
 
         # Concatenate predictions and labels
         pred_score = np.concatenate([pos_pred, neg_pred])
@@ -371,6 +356,27 @@ def pred_batch(train_val_data, test_data, rand_sampler, args, evaluator):
 
     return np.mean(val_ap), np.mean(val_auc_roc), merged_metrics
 
+def truncate_mask(mask, pct=1.0, keep='first'):
+    """Truncate a mask by keeping only a pct% of True indices.
+
+    Args:
+        mask: boolean array.
+        pct: float ∈ (0, 1].
+        keep: 'first' or 'last' — whether to keep the beginning or end.
+    """
+    true_indices = np.where(mask)[0]
+    n_keep = int(len(true_indices) * pct)
+
+    if keep == 'first':
+        selected = true_indices[:n_keep]
+    elif keep == 'last':
+        selected = true_indices[-n_keep:]
+    else:
+        raise ValueError("`keep` must be 'first' or 'last'")
+
+    truncated = np.zeros_like(mask, dtype=bool)
+    truncated[selected] = True
+    return truncated
 
 def main():
     print("===========================================================================")
@@ -393,7 +399,7 @@ def main():
         'w_mode': cm_args.w_mode,
         'K': cm_args.k_val,
         'learn_through_time': learn_through_time,
-        'batch_size': 50, # untested 200,
+        'batch_size': 200, # untested 200,
         'neg_sample': NEG_SAMPLE
     }
 
@@ -408,23 +414,15 @@ def main():
     }
     #print("DEBUG: Keys in full_data:", full_data.keys())
 
-    def truncate_mask(mask, pct=1.0):
-        """Truncate a mask by keeping only the first pct% of True indices."""
-        true_indices = np.where(mask)[0]
-        n_keep = int(len(true_indices) * pct)
-        truncated = np.zeros_like(mask, dtype=bool)
-        truncated[true_indices[:n_keep]] = True
-        return truncated
-
     # Use TGB official masks
     train_mask = tgb_dataset.train_mask
     val_mask = tgb_dataset.val_mask
     test_mask = tgb_dataset.test_mask
 
-    # Truncate before extracting data
-    train_mask = truncate_mask(train_mask, pct=0.4)
-    val_mask = truncate_mask(val_mask, pct=0.6)
-    test_mask = truncate_mask(test_mask, pct=0.6)
+    # Truncate: keep *last* of train, but *first* of val/test
+    train_mask = truncate_mask(train_mask, pct=.2, keep='last')
+    val_mask = truncate_mask(val_mask, pct=.2, keep='first')
+    test_mask = truncate_mask(test_mask, pct=.2, keep='first')
 
     def extract_data(mask):
         return Data(
@@ -448,34 +446,6 @@ def main():
     #    labels=np.concatenate([train_data.labels, val_data.labels])
     #)
 
-    def truncate_data(data, n=1_000_000):
-        idx = np.random.choice(len(data.sources), size=min(n, len(data.sources)), replace=False)
-        return Data(
-            sources=data.sources[idx],
-            destinations=data.destinations[idx],
-            timestamps=data.timestamps[idx],
-            edge_idxs=data.edge_idxs[idx],
-            labels=data.labels[idx]
-        )
-
-    def truncate_early(data, pct=1.0):
-        """Truncate a percentage (pct ∈ (0, 1]) of the data starting from the beginning."""
-        n_total = len(data.sources)
-        n_keep = int(n_total * pct)
-        return Data(
-            sources=data.sources[:n_keep],
-            destinations=data.destinations[:n_keep],
-            timestamps=data.timestamps[:n_keep],
-            edge_idxs=data.edge_idxs[:n_keep],
-            labels=data.labels[:n_keep]
-        )
-
-    #train_data = truncate_data(train_data)
-    #val_data = truncate_data(val_data)
-    #test_data = truncate_data(test_data)
-    #train_data = truncate_early(train_data, 0.5)
-    #val_data = truncate_early(val_data, 0.5)  # keep it smaller than test
-    #test_data = truncate_early(test_data, 0.5)
 
     tr_val_data = Data(
         sources=np.concatenate([train_data.sources, val_data.sources]),
@@ -529,7 +499,7 @@ def main():
         )
     else:
         print(f"INFO: Negative Edge Sampling: {NEG_SAMPLE}")
-        test_rand_sampler = RandEdgeSampler(all_sources, all_destinations, seed=2)
+        test_rand_sampler = RandEdgeSamplerFast(all_sources, all_destinations, seed=2)
 
     results_file = "experiments.csv"
     write_header = True
@@ -552,9 +522,6 @@ def main():
         #full_data_combined.destinations = full_data_combined.destinations.astype(np.int32)
       #  test_rand_sampler = RandEdgeSampler(full_data_combined.sources, full_data_combined.destinations, seed=2)
         
-    #results_file = "experiments.csv"
-    #write_header = True #not os.path.exists(results_file)
-
     #print(f"[DEBUG] Memory used: {psutil.virtual_memory().used / 1024 ** 3:.2f} GiB")
 
     with open(results_file, mode='a', newline='') as f:
@@ -617,13 +584,6 @@ def main():
                 write_header = False
 
             writer.writerow(row)
-
-    # Upload the results file to GCS
-    #upload_to_gcs(
-    #    bucket_name="base3-456222-results", 
-    #    source_file_name=results_file,
-    #    destination_blob_name=f"experiment_outputs/{int(time.time())}_{results_file}"
-    #)
 
     print("===========================================================================")
 

@@ -7,6 +7,43 @@ https://github.com/fpour/DGB/blob/main/
 import numpy as np
 import random
 
+class RandEdgeSamplerFast:
+    def __init__(self, src_list, dst_list, seed=None):
+        self.neg_sample = 'rnd'
+        self.src_list = np.unique(np.array(src_list, dtype=np.int32))
+        self.dst_list = np.unique(np.array(dst_list, dtype=np.int32))
+
+        self.seed = seed
+        self.random_state = np.random.RandomState(seed) if seed is not None else np.random
+
+    def edge_hash(self, u, v):
+        return (int(u) << 32) + int(v)
+
+    def sample(self, size, pos_src, pos_dst):
+        pos_hash_set = set(self.edge_hash(u, v) for u, v in zip(pos_src, pos_dst))
+
+        neg_src = []
+        neg_dst = []
+        attempts = 0
+        max_attempts = size * 2
+
+        while len(neg_src) < size and attempts < max_attempts:
+            u = self.random_state.choice(self.src_list)
+            v = self.random_state.choice(self.dst_list)
+            if self.edge_hash(u, v) not in pos_hash_set:
+                neg_src.append(u)
+                neg_dst.append(v)
+            attempts += 1
+
+        if len(neg_src) < size:
+            print(f"[WARN] Only generated {len(neg_src)} negative edges after {attempts} attempts.")
+
+        return neg_src, neg_dst
+
+    def reset_random_state(self):
+        if self.seed is not None:
+            self.random_state = np.random.RandomState(self.seed)
+
 class RandEdgeSampler_original(object):
     """
     from TGN code
@@ -35,7 +72,7 @@ class RandEdgeSampler_original(object):
         self.random_state = np.random.RandomState(self.seed)
 
 
-class RandEdgeSamplerq(object):
+class RandEdgeSamplero(object):
 
     def __init__(self, src_list, dst_list, seed=None):
         self.seed = None
@@ -81,7 +118,7 @@ class RandEdgeSampler(object):
         neg_src = []
         neg_dst = []
         attempts = 0
-        max_attempts = size * 5  # to prevent infinite loops
+        max_attempts = size * 1  # to prevent infinite loops
 
         while len(neg_src) < size and attempts < max_attempts:
             # Sample a candidate edge
