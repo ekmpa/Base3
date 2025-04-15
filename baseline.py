@@ -194,7 +194,7 @@ def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt, po
     # Generate memories
     mem_edges = edge_bank_time_window_memory(
         srcs, dsts, ts_list,
-        window_mode="fixed", #memory_opt.get("w_mode", "fixed"),
+        window_mode="avg_reoccur", #memory_opt.get("w_mode", "fixed"),
         memory_span=0.01 #memory_opt.get("eb_mem_span", 0.01) 
     )
     #mem_edges = edge_bank_unlimited_memory(srcs, dsts)  
@@ -209,7 +209,8 @@ def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt, po
 
     current_time = max(np.max(pos_destinations), np.max(neg_destinations))
 
-    step_mem = tCoMem(srcs, dsts, ts_list, current_time, num_nodes, time_window=1_000_000)
+    #step_mem = tCoMem(srcs, dsts, ts_list, current_time, num_nodes, time_window=1_000_000)
+    step_mem = tCoMem(srcs, dsts, ts_list, current_time, time_window=1_000_000)
     
     poptrack_model = PopTrack(num_nodes=num_nodes)
     poptrack_model.update_batch(dsts) 
@@ -420,9 +421,9 @@ def main():
     test_mask = tgb_dataset.test_mask
 
     # Truncate: keep *last* of train, but *first* of val/test
-    train_mask = truncate_mask(train_mask, pct=.2, keep='last')
-    val_mask = truncate_mask(val_mask, pct=.2, keep='first')
-    test_mask = truncate_mask(test_mask, pct=.2, keep='first')
+    #train_mask = truncate_mask(train_mask, pct=.2, keep='last')
+    #val_mask = truncate_mask(val_mask, pct=.2, keep='first')
+    #test_mask = truncate_mask(test_mask, pct=.2, keep='first')
 
     def extract_data(mask):
         return Data(

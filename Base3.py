@@ -7,10 +7,11 @@ from scipy.sparse import dok_matrix
 # --- t-CoMem Module ---
 # ==========================
 
-class tCoMeM:
-    def __init__(self, srcs, dsts, ts_list, current_time, num_nodes, time_window=1_000_000, co_occurrence_weight=0.5):
-        self.node_to_recent_dests = defaultdict(lambda: deque(maxlen=100))
-        self.co_occurrence = dok_matrix((num_nodes, num_nodes), dtype=np.int32)  # Sparse co-occurrence
+
+class tCoMem:
+    def __init__(self, srcs, dsts, ts_list, current_time, time_window=1_000_000, co_occurrence_weight=0.5):
+        self.node_to_recent_dests = defaultdict(lambda: deque(maxlen=100))  # deque saves memory and is faster
+        self.node_to_co_occurrence = defaultdict(lambda: defaultdict(int))  # Tracks co-occurrence of (u, v)
         self.time_window = time_window
         self.co_occurrence_weight = co_occurrence_weight
 
@@ -20,28 +21,38 @@ class tCoMeM:
 
     def update(self, u, v, t):
         self.node_to_recent_dests[u].append((t, v))
-        self.co_occurrence[u, v] += 1
-        self.co_occurrence[v, u] += 1
+        self.node_to_co_occurrence[u][v] += 1
+        self.node_to_co_occurrence[v][u] += 1
+
+    def updateOld(self, u, v, t):
+        self.node_to_recent_dests[u].append((t, v))
+
+        # Co-occurrence as sparse dicts
+        #self.node_to_co_occurrence.setdefault(u, {}).setdefault(v, 0)
+        #self.node_to_co_occurrence.setdefault(v, {}).setdefault(u, 0)
+
+        self.node_to_co_occurrence[u][v] += 1
+        self.node_to_co_occurrence[v][u] += 1
+
+    def get_poptrack_score(self, v, poptrack_model):
+        return poptrack_model.get_score(v)
 
     def get_score(self, u, v, current_time, poptrack_model):
         score = 0.0
         recent = self.node_to_recent_dests.get(u, [])
         valid_recent = [(ts, nbr) for ts, nbr in recent if 0 <= current_time - ts <= self.time_window]
-
-        # Co-occurrence score from sparse matrix
-        co_occurrence_score = self.co_occurrence[u, v] if (u, v) in self.co_occurrence else 0
+        co_occurrence_score = self.node_to_co_occurrence.get(u, {}).get(v, 0)
 
         for ts, nbr in valid_recent:
             decay = np.exp(-(current_time - ts) / self.time_window)
-            pop_score = poptrack_model.get_score(nbr)
-            #pop_score = self.get_poptrack_score(nbr, poptrack_model)
+            pop_score = self.get_poptrack_score(nbr, poptrack_model)
             score += decay * pop_score
 
         co_occurrence_influence = self.co_occurrence_weight * (co_occurrence_score / (1 + co_occurrence_score))
         score += co_occurrence_influence
 
         return score / (1 + score) if score > 0 else 0.0
-
+  
 
 # ==========================
 # --- PopTrack Module ---
@@ -91,9 +102,9 @@ def full_interpolated_score(u, v, t, edgebank, poptrack_model, top_k_nodes, step
     """
 
     if (u,v) in edgebank:
-        alpha, beta, delta = 0.4, 0.3, 0.3 
+        alpha, beta, delta = 0.5, 0.2, 0.3 
     else: 
-        alpha, beta, delta = 0.2, 0.4, 0.4
+        alpha, beta, delta = 0.2, 0.3, 0.5
 
     # Base signals
     eb_score = edgebank_score(u, v, edgebank)
