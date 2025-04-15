@@ -46,23 +46,20 @@ def predict_links(edgebank_mem, edge_set, poptrack_model, timestamps_batch,
 
     source_nodes, destination_nodes = edge_set
     pred = []
-
-    top_k_nodes, _ = poptrack_model.predict_batch(K=poptrack_K)
-    top_k_nodes = set(top_k_nodes)
+    
+    top_k_nodes, top_k_scores = poptrack_model.predict_batch(K=poptrack_K)
+    top_k_dict = {node: score for node, score in zip(top_k_nodes, top_k_scores)}
 
     for i in range(len(destination_nodes)):
         u, v = source_nodes[i], destination_nodes[i]
         t = timestamps_batch[i]
 
-        score = full_interpolated_score(u, v, t, edgebank_mem, poptrack_model, top_k_nodes, step_mem) 
+        score = full_interpolated_score(u, v, t, edgebank_mem, 
+                                        poptrack_model, top_k_nodes, top_k_dict, top_k_scores, step_mem) 
 
         pred.append(score)
 
-    poptrack_model.update_batch(
-        dest_nodes=destination_nodes,
-        #timestamps=timestamps_batch,
-        #src_nodes=source_nodes 
-    )
+    poptrack_model.update_batch(destination_nodes)
 
     return np.array(pred)
 
@@ -213,19 +210,23 @@ def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt, po
     step_mem = tCoMem(srcs, dsts, ts_list, current_time, time_window=1_000_000)
     
     poptrack_model = PopTrack(num_nodes=num_nodes)
-    poptrack_model.update_batch(dsts) 
+    #poptrack_model.update_batch(dsts) so, if you update like here <-- it gives lower (and potentially no increase w K)
 
     #print("done memories, going to pred")
 
     # Pretrain poptrack_model on history before test
-    #for u, v, t in zip(srcs, dsts, ts_list):
-     #   poptrack_model.update_batch([v], timestamps=[t], src_nodes=[u])
+    for u, v, t in zip(srcs, dsts, ts_list):
+        poptrack_model.update_batch([v]) #, timestamps=[t], src_nodes=[u])
 
     pos_pred = predict_links(mem_edges, positive_edges, poptrack_model,
                             positive_edges[1], poptrack_K, step_mem)
     neg_pred = predict_links(mem_edges, negative_edges, poptrack_model,
                             negative_edges[1], poptrack_K, step_mem)#pos_pred = predict_links(mem_edges, positive_edges, poptrack_model, max(ts_list), poptrack_K)
 
+    #poptrack_model.update_batch(dest_nodes=np.concatenate([
+     #   positive_edges[1], negative_edges[1]
+    #]))
+    
     return pos_pred, neg_pred
 
 
@@ -409,12 +410,7 @@ def main():
     tgb_dataset = LinkPropPredDataset(name=network_name, root="datasets", preprocess=True)
 
     full_data = tgb_dataset.full_data
-    full_data = {
-        key: val.astype(np.int32) if val.dtype == np.int64 else val
-        for key, val in tgb_dataset.full_data.items()
-    }
-    #print("DEBUG: Keys in full_data:", full_data.keys())
-
+    
     # Use TGB official masks
     train_mask = tgb_dataset.train_mask
     val_mask = tgb_dataset.val_mask
@@ -437,16 +433,6 @@ def main():
     train_data = extract_data(train_mask)
     val_data = extract_data(val_mask)
     test_data = extract_data(test_mask)
-
-    # Combined sets
-    #tr_val_data = Data(
-     #   sources=np.concatenate([train_data.sources, val_data.sources]),
-      #  destinations=np.concatenate([train_data.destinations, val_data.destinations]),
-       # timestamps=np.concatenate([train_data.timestamps, val_data.timestamps]),
-        #edge_idxs=np.concatenate([train_data.edge_idxs, val_data.edge_idxs]),
-    #    labels=np.concatenate([train_data.labels, val_data.labels])
-    #)
-
 
     tr_val_data = Data(
         sources=np.concatenate([train_data.sources, val_data.sources]),
@@ -503,7 +489,7 @@ def main():
         test_rand_sampler = RandEdgeSamplerFast(all_sources, all_destinations, seed=2)
 
     results_file = "experiments.csv"
-    write_header = True
+    write_header = not os.path.exists(results_file)
 
     # Sampling
     #if NEG_SAMPLE == 'rp_ns':

@@ -12,7 +12,7 @@ W_MODES=("fixed" "avg_reoccur")
 MEM_SPANS=("0.0001" "0.001" "0.01" "0.1" "1")
 
 # DGB datasets (https://zenodo.org/records/7213796#.Y1cO6y8r30o)
-DATA_ARGS=("tgbl-coin" "tbl-comment" "tgbl-flight") #  "tgbl-review" "tgbl-comment" 
+DATA_ARGS=("tgbl-wiki") # "tbl-comment" "tgbl-flight") #  "tgbl-review" "tgbl-comment" 
 #DATA_ARGS=("enron" "uci" "mooc" "USLegis" "UNvote" "CanParl" "SocialEvo") # "wiki" "uci" "uci"  
 
 # Negative sampling modes
