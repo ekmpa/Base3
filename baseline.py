@@ -52,8 +52,8 @@ def predict_links(edgebank_mem, edge_set, poptrack_model, timestamps_batch,
 
     poptrack_model.update_batch(
         dest_nodes=destination_nodes,
-        timestamps=timestamps_batch,
-        src_nodes=source_nodes 
+        #timestamps=timestamps_batch,
+        #src_nodes=source_nodes 
     )
     return np.array(pred)
 
@@ -213,7 +213,7 @@ def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt, po
 
     # Pretrain poptrack_model on history before test
     for u, v, t in zip(srcs, dsts, ts_list):
-        poptrack_model.update_batch([v], timestamps=[t], src_nodes=[u])
+        poptrack_model.update_batch([v]) #, timestamps=[t], src_nodes=[u])
 
     current_time = max(ts_list)
 

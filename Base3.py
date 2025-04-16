@@ -56,14 +56,8 @@ class PopTrack:
     def __init__(self, num_nodes, decay=0.995):
         self.decay = decay
         self.popularity = np.zeros(num_nodes, dtype=np.float32)  # switch to float32 to save 50% memory
-
-    def update_batch_old(self, dest_nodes): #, timestamps=None, src_nodes=None):
-        for dst in dest_nodes:
-            dst = int(dst)
-            self.popularity[dst] += 1.0
-        self.popularity *= self.decay
     
-    def update_batch(self, dest_nodes, timestamps=None, src_nodes=None):
+    def update_batch(self, dest_nodes):
         for dst in dest_nodes:
             dst = int(dst)
             self.popularity[dst] += 1.0
