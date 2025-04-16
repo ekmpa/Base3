@@ -8,38 +8,29 @@ from scipy.sparse import dok_matrix
 # ==========================
 
 class tCoMem:
-    def __init__(self, srcs, dsts, ts_list, current_time, time_window=1_000_000, co_occurrence_weight=0.5):
+    def __init__(self, time_window=1_000_000, co_occurrence_weight=0.5):
         self.node_to_recent_dests = defaultdict(lambda: deque(maxlen=100))  # deque saves memory and is faster
-        self.node_to_co_occurrence = defaultdict(dict)
-        #self.node_to_co_occurrence = defaultdict(lambda: defaultdict(int))  # Tracks co-occurrence of (u, v)
+        self.node_to_co_occurrence = defaultdict(dict)  # nested dict still better than defaultdict of defaultdicts
         self.time_window = time_window
         self.co_occurrence_weight = co_occurrence_weight
-
-        for u, v, t in zip(srcs, dsts, ts_list):
-            if 0 <= current_time - t <= self.time_window:
-                self.update(u, v, t)
+        self.poptrack_scores_cache = {}
 
     def update(self, u, v, t):
         self.node_to_recent_dests[u].append((t, v))
-        self.node_to_co_occurrence.setdefault(u, {}).setdefault(v, 0)
-        self.node_to_co_occurrence[u][v] += 1
-        self.node_to_co_occurrence.setdefault(v, {}).setdefault(u, 0)
-        self.node_to_co_occurrence[v][u] += 1
-
-    def updateOld(self, u, v, t):
-        self.node_to_recent_dests[u].append((t, v))
 
         # Co-occurrence as sparse dicts
-        #self.node_to_co_occurrence.setdefault(u, {}).setdefault(v, 0)
-        #self.node_to_co_occurrence.setdefault(v, {}).setdefault(u, 0)
+        self.node_to_co_occurrence.setdefault(u, {}).setdefault(v, 0)
+        self.node_to_co_occurrence.setdefault(v, {}).setdefault(u, 0)
 
         self.node_to_co_occurrence[u][v] += 1
         self.node_to_co_occurrence[v][u] += 1
 
     def get_poptrack_score(self, v, poptrack_model):
-        return poptrack_model.get_score(v)
+        if v not in self.poptrack_scores_cache:
+            self.poptrack_scores_cache[v] = poptrack_model.get_score(v)
+        return self.poptrack_scores_cache[v]
 
-    def get_score(self, u, v, current_time, top_k): #poptrack_model):
+    def get_score(self, u, v, current_time, poptrack_model):
         score = 0.0
         recent = self.node_to_recent_dests.get(u, [])
         valid_recent = [(ts, nbr) for ts, nbr in recent if 0 <= current_time - ts <= self.time_window]
@@ -47,13 +38,14 @@ class tCoMem:
 
         for ts, nbr in valid_recent:
             decay = np.exp(-(current_time - ts) / self.time_window)
-            pop_score = 1.0 if v in top_k else 0.0# self.get_poptrack_score(nbr, poptrack_model)
+            pop_score = self.get_poptrack_score(nbr, poptrack_model)
             score += decay * pop_score
 
         co_occurrence_influence = self.co_occurrence_weight * (co_occurrence_score / (1 + co_occurrence_score))
         score += co_occurrence_influence
 
         return score / (1 + score) if score > 0 else 0.0
+    
   
 # ==========================
 # --- PopTrack Module ---
@@ -122,16 +114,15 @@ def full_interpolated_score_notconf(u, v, t, edgebank, poptrack_model, top_k_nod
 
 
 
-def full_interpolated_score(u, v, t, edgebank, poptrack_model, top_k_nodes, top_k_dict, top_k_scores, step_mem):
+def full_interpolated_score(u, v, t, edgebank, poptrack_model, top_k_nodes, coMem):
     """
     Interpolated score with weights smoothly adapted based on EdgeBank confidence.
     """
-
     # Base signals
     eb_score = edgebank_score(u, v, edgebank)
-    #pop_score = 1.0 if v in top_k_nodes else 0.0
-    step_score = step_mem.get_score(u, v, t, top_k_nodes)
-    pop_score = top_k_dict.get(v, 0.0) / (np.max(top_k_scores) + 1e-6)
+    pop_score = 1.0 if v in top_k_nodes else 0.0
+    co_score = coMem.get_score(u, v, t, poptrack_model)
+
     # Use eb_score itself as a soft confidence value 
     eb_conf = eb_score
 
@@ -147,4 +138,4 @@ def full_interpolated_score(u, v, t, edgebank, poptrack_model, top_k_nodes, top_
 
     # alpha, beta, delta = 0,1,0
 
-    return alpha * eb_score + beta * pop_score + delta * step_score
+    return alpha * eb_score + beta * pop_score + delta * co_score
