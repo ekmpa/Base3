@@ -7,7 +7,6 @@ See README for more.
 Edgebank code is from the DBG github; 
 https://github.com/fpour/DGB/blob/main/
 """
-from pathlib import Path
 import numpy as np
 import pandas as pd
 import random
@@ -19,7 +18,6 @@ from load_data import Data, get_data
 from args_parser import parse_args_edge_bank
 from evaluation import *
 from Base3 import *
-from sklearn.preprocessing import MinMaxScaler
 import csv
 import os
 
@@ -50,11 +48,7 @@ def predict_links(edgebank_mem, edge_set, poptrack_model, timestamps_batch,
 
         pred.append(score)
 
-    poptrack_model.update_batch(
-        dest_nodes=destination_nodes,
-        #timestamps=timestamps_batch,
-        #src_nodes=source_nodes 
-    )
+    poptrack_model.update_batch(dest_nodes=destination_nodes)
     return np.array(pred)
 
 
@@ -189,7 +183,7 @@ def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt, po
     # Generate memories
     mem_edges = edge_bank_time_window_memory(
         srcs, dsts, ts_list,
-        window_mode="avg_reoccur", #memory_opt.get("w_mode", "fixed"),
+        window_mode="fixed", #memory_opt.get("w_mode", "fixed"),
             # test with rp_ns
         memory_span=0.01 #memory_opt.get("eb_mem_span", 0.01) 
     )
@@ -207,15 +201,11 @@ def pred_end_to_end(history_data, positive_edges, negative_edges, memory_opt, po
     for u, v, t in zip(srcs, dsts, ts_list):
         coMem.update(u, v, t)
 
-    current_time = max(np.max(pos_destinations), np.max(neg_destinations))
-    
     poptrack_model = PopTrack(num_nodes=num_nodes)
 
     # Pretrain poptrack_model on history before test
     for u, v, t in zip(srcs, dsts, ts_list):
         poptrack_model.update_batch([v]) #, timestamps=[t], src_nodes=[u])
-
-    current_time = max(ts_list)
 
     pos_pred = predict_links(mem_edges, positive_edges, poptrack_model,
                             positive_edges[1], poptrack_K, coMem)
@@ -348,6 +338,38 @@ def pred_batch(train_val_data, test_data, rand_sampler, args, evaluator):
 
     return np.mean(val_ap), np.mean(val_auc_roc), merged_metrics
 
+
+def truncate_mask(mask, pct=1.0, keep='first'):
+    """Truncate a mask by keeping only a pct% of True indices.
+
+    Args:
+        mask: boolean array.
+        pct: float ∈ (0, 1].
+        keep: 'first' or 'last' — whether to keep the beginning or end.
+    """
+    true_indices = np.where(mask)[0]
+    n_keep = int(len(true_indices) * pct)
+
+    if keep == 'first':
+        selected = true_indices[:n_keep]
+    elif keep == 'last':
+        selected = true_indices[-n_keep:]
+    else:
+        raise ValueError("`keep` must be 'first' or 'last'")
+
+    truncated = np.zeros_like(mask, dtype=bool)
+    truncated[selected] = True
+    return truncated
+
+def extract_data(full_data, mask):
+    return Data(
+        sources=full_data['sources'][mask],
+        destinations=full_data['destinations'][mask],
+        timestamps=full_data['timestamps'][mask],
+        edge_idxs=full_data['edge_idxs'][mask],
+        labels=full_data['edge_label'][mask]
+    )
+
 def main():
     print("===========================================================================")
     cm_args = parse_args_edge_bank()
@@ -385,18 +407,13 @@ def main():
     val_mask = tgb_dataset.val_mask
     test_mask = tgb_dataset.test_mask
 
-    def extract_data(mask):
-        return Data(
-            sources=full_data['sources'][mask],
-            destinations=full_data['destinations'][mask],
-            timestamps=full_data['timestamps'][mask],
-            edge_idxs=full_data['edge_idxs'][mask],
-            labels=full_data['edge_label'][mask]
-        )
+    train_mask = truncate_mask(train_mask, pct=.1, keep='last')
+    val_mask = truncate_mask(val_mask, pct=.1, keep='last')
+    test_mask = truncate_mask(test_mask, pct=.1, keep='first')
 
-    train_data = extract_data(train_mask)
-    val_data = extract_data(val_mask)
-    test_data = extract_data(test_mask)
+    train_data = extract_data(full_data, train_mask)
+    val_data = extract_data(full_data, val_mask)
+    test_data = extract_data(full_data, test_mask)
 
     # Combined sets
     tr_val_data = Data(
@@ -429,12 +446,12 @@ def main():
         test_rand_sampler = RandEdgeSampler(full_data_combined.sources, full_data_combined.destinations, seed=2)
 
     results_file = "experiments.csv"
-    write_header = True #not os.path.exists(results_file)
+    write_header = not os.path.exists(results_file)
 
     with open(results_file, mode='a', newline='') as f:
         writer = csv.writer(f)
         if write_header:
-            fieldnames = ["dataset", "neg_sample", "run",
+            fieldnames = ["dataset", "neg_sample", "K", "run",
                             "val_mrr", "val_ap", "val_au_roc_score",
                             "test_mrr", "test_ap", "test_au_roc_score"
                             ]
@@ -470,6 +487,7 @@ def main():
             row = {
                 "dataset": network_name,
                 "neg_sample": NEG_SAMPLE,
+                "K": args['K'],
                 "run": i_run,
                 "val_mrr": val_measures_dict.get("mrr"),
                 "val_ap": val_ap,

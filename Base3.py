@@ -55,7 +55,7 @@ class tCoMem:
 class PopTrack:
     def __init__(self, num_nodes, decay=0.995):
         self.decay = decay
-        self.popularity = np.zeros(num_nodes, dtype=np.float32)  # switch to float32 to save 50% memory
+        self.popularity = np.zeros(int(num_nodes), dtype=np.float32)  # switch to float32 to save 50% memory
     
     def update_batch(self, dest_nodes):
         for dst in dest_nodes:
