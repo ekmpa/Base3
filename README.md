@@ -6,7 +6,7 @@
 - **Node popularity** via [PopTrack](https://github.com/temporal-graphs-negative-sampling/TGB/tree/main)  
 - **Temporal co-occurrence** via our proposed module, **t-CoMem**
 
-Base3 fuses these signals through a modular interpolation strategy and achieves **state-of-the-art performance** on multiple datasets from the [Temporal Graph Benchmark (TGB)](https://tgb.complexdatalab.com), even outperforming complex deep learning models in challenging settings like **inductive** and **historical** negative sampling.
+Base3 fuses these signals through a modular interpolation strategy and achieves **state-of-the-art performance** on multiple datasets from the [Temporal Graph Benchmark (TGB)](https://tgb.complexdatalab.com), even outperforming complex deep learning models in some cases -- and achieving strong performance in challenging settings like **inductive** and **historical** negative sampling, where models usually degrade.
 
 ## 🔍 Highlights
 - No training or backprop required
