@@ -1,46 +1,45 @@
 #!/bin/bash
 
-# Fixed args
-VAL_RATIO="0.15"
-TEST_RATIO="0.15"
-N_RUNS="1"
+# Batch script for running Base3 with various settings
+
+# Fixed/default args
+BS="200"
+SEED="2"
 MEM_MODE="time_window"
 W_MODE="fixed"
+METHOD="multi_conf"
+CO_OCCUR_WEIGHT="1.0"
 
-W_MODES=("fixed" "avg_reoccur")
+# Hyperparameters to sweep
+MEM_SPANS=("0.0001" "0.001" "0.01" "0.1" "1.0")
+K_VALUES=("50" "100" "500" "1000" "50000")
+SAMPLING_MODES=("rnd" "induc_nre" "hist_nre" "rp_ns")
+DATASETS=("tgbl-wiki")  
 
-MEM_SPANS=("0.0001" "0.001" "0.01" "0.1" "1")
-
-# DGB datasets (https://zenodo.org/records/7213796#.Y1cO6y8r30o)
-DATA_ARGS=("tgbl-wiki") # "tbl-comment" "tgbl-flight") #  "tgbl-review" "tgbl-comment" 
-#DATA_ARGS=("enron" "uci" "mooc" "USLegis" "UNvote" "CanParl" "SocialEvo") # "wiki" "uci" "uci"  
-
-# Negative sampling modes
-SAMPLING_MODES=("rnd" "induc_nre" "hist_nre" "rp_ns") # "rnd"
-
-# K for Poptrack
-K_VALS=("50" "100" "500" "1000" "50000")
-
-#MEM_MODES=("unlim_mem" "time_window")
-
-for DATA in "${DATA_ARGS[@]}"
+for DATA in "${DATASETS[@]}"
 do
     for NEG_SAMPLE in "${SAMPLING_MODES[@]}"
     do
-        for K in "${K_VALS[@]}"
-        do 
-            echo "Running on dataset: $DATA | Sampling: $NEG_SAMPLE"
-            python baseline.py \
-                --data "$DATA" \
-                --val_ratio "$VAL_RATIO" \
-                --test_ratio "$TEST_RATIO" \
-                --n_runs "$N_RUNS" \
-                --neg_sample "$NEG_SAMPLE" \
-                --mem_mode "$MEM_MODE" \
-                --w_mode "$W_MODE" \
-                --k_val "$K" 
+        for MEM_SPAN in "${MEM_SPANS[@]}"
+        do
+            for K in "${K_VALUES[@]}"
+            do
+                echo "Running: DATA=$DATA | NS=$NEG_SAMPLE | K=$K | MS=$MEM_SPAN"
 
-            echo "-------------------------------------------------------------"
+                python baseline.py \
+                    --data "$DATA" \
+                    --bs "$BS" \
+                    --seed "$SEED" \
+                    --neg_sample "$NEG_SAMPLE" \
+                    --mem_mode "$MEM_MODE" \
+                    --w_mode "$W_MODE" \
+                    --mem_span "$MEM_SPAN" \
+                    --k_value "$K" \
+                    --co_occurrence_weight "$CO_OCCUR_WEIGHT" \
+                    --method "$METHOD"
+
+                echo "-------------------------------------------------------------"
+            done
         done
     done
 done
