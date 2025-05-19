@@ -7,7 +7,7 @@ import argparse
 import sys
 
 def get_args():
-    parser = argparse.ArgumentParser('*** TGB: Base3 ***')
+    parser = argparse.ArgumentParser('*** Base3 ***')
 
     # Dataset
     parser.add_argument('-d', '--data', type=str, default='tgbl-coin',
