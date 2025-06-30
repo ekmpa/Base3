@@ -1,6 +1,7 @@
 """
 This is a script from TGB's examples' structure, on which to run Base3. 
 It is more efficient on larger graphs.
+It can be used in the bash experiments script in the same way as baseline.py.
 """
 
 import timeit
