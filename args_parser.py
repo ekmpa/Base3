@@ -36,8 +36,11 @@ def get_args():
                         help='Weight assigned to co-occurrence scores in t-CoMem.')
 
     # Interpolation strategy
-    parser.add_argument('--method', type=str, default='PopTrack',
+    parser.add_argument('--method', type=str, default='multi_conf',
                         help='Scoring strategy to use (e.g., PopTrack, EdgeBank, t-CoMem, multi_conf, etc.).')
+
+    parser.add_argument('--neg_sample', type=str, default='rnd', choices=['rnd', 'hist_nre', 'induc_nre', 'rp_ns'],
+                        help='Strategy for the negative edge sampling.')
 
     try:
         args = parser.parse_args()
